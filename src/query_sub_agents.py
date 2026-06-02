@@ -11,12 +11,12 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
-from src.models import QueryFieldInfo, SubAgentResult
-from src.rpc_client import RPC_METHODS, POCKET_NETWORK_RPC_ENDPOINT, PocketNetworkRPCClient
 from src.graphql_client import GRAPHQL_REGISTRY, POCKET_NETWORK_DATA_ENDPOINT, PocketNetworkAPIClient
+from src.graphql_validator import validate_graphql_query
+from src.models import QueryFieldInfo, SubAgentResult
+from src.rpc_client import POCKET_NETWORK_RPC_ENDPOINT, RPC_METHODS, PocketNetworkRPCClient
 from src.rpc_validator import validate_rpc_call
 from src.tools_introspection import INTROSPECTION_TOOLS
-from src.graphql_validator import validate_graphql_query
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,7 @@ class QuerySubAgentStateDict(TypedDict):
     query_result: Optional[Any]
     execution_error: Optional[str]
 
+
 class QueryBuilderSubAgent(ABC):
     """Base class for query builder sub-agents."""
 
@@ -48,7 +49,6 @@ class QueryBuilderSubAgent(ABC):
         self.graphql_client = PocketNetworkAPIClient()
         self.rpc_client = PocketNetworkRPCClient()
         self.graph = self._build_graph()
-
 
     @abstractmethod
     def get_system_prompt(self) -> str:
@@ -187,12 +187,8 @@ CURRENT DATE: {datetime.now().isoformat()}"""
                         tool_result = tool_map[tool_name].invoke(tool_args)
                     except Exception as tool_exc:
                         tool_result = f"Tool error: {tool_exc}"
-                        logger.warning(
-                            "[%s] Tool %r failed: %s", self.name, tool_name, tool_exc
-                        )
-                    messages.append(
-                        ToolMessage(content=str(tool_result), tool_call_id=tc["id"])
-                    )
+                        logger.warning("[%s] Tool %r failed: %s", self.name, tool_name, tool_exc)
+                    messages.append(ToolMessage(content=str(tool_result), tool_call_id=tc["id"]))
 
             raw = response.content.strip()
 
@@ -229,18 +225,16 @@ CURRENT DATE: {datetime.now().isoformat()}"""
                 error_msg = f"LLM output is not valid JSON: {exc}"
                 logger.warning("[%s] %s", self.name, error_msg)
                 return {
-                        "attempt_count": attempt,
-                        "query": "",
-                        "validation_error": None,
-                        "llm_error": None,
-                        "success": False,
-                        "explanation": error_msg,
-                        "endpoint_type": "",
-                    }
+                    "attempt_count": attempt,
+                    "query": "",
+                    "validation_error": None,
+                    "llm_error": None,
+                    "success": False,
+                    "explanation": error_msg,
+                    "endpoint_type": "",
+                }
 
-            logger.debug(
-                "[%s] LLM produced output on attempt %d:\n%s", self.name, attempt, raw
-            )
+            logger.debug("[%s] LLM produced output on attempt %d:\n%s", self.name, attempt, raw)
             return {
                 "attempt_count": attempt,
                 "query": raw,
@@ -276,9 +270,7 @@ CURRENT DATE: {datetime.now().isoformat()}"""
         for field_key in self.graphql_methods:
             field_info = GRAPHQL_REGISTRY.get(field_key)
             if not field_info:
-                logger.error(
-                    "[%s] Field '%s' not found in registry.", self.name, field_key
-                )
+                logger.error("[%s] Field '%s' not found in registry.", self.name, field_key)
                 continue
             methods_lines.append(self._format_field_info(field_info))
 
@@ -318,22 +310,15 @@ CURRENT DATE: {datetime.now().isoformat()}"""
         if attempt > 1:
             if state.get("validation_error"):
                 retry_hint = (
-                    f"\n\nPREVIOUS ATTEMPT FAILED WITH THIS VALIDATION ERROR – fix it:\n"
-                    f"{state['validation_error']}\n"
+                    f"\n\nPREVIOUS ATTEMPT FAILED WITH THIS VALIDATION ERROR – fix it:\n{state['validation_error']}\n"
                 )
-                logger.debug(
-                    "[%s] Injecting retry hint: %s", self.name, state["validation_error"]
-                )
+                logger.debug("[%s] Injecting retry hint: %s", self.name, state["validation_error"])
             else:
                 # This is an excution error
                 retry_hint = (
-                    f"\n\nPREVIOUS ATTEMPT FAILED WITH THIS EXECUTION ERROR – fix it:\n"
-                    f"{state['execution_error']}\n"
+                    f"\n\nPREVIOUS ATTEMPT FAILED WITH THIS EXECUTION ERROR – fix it:\n{state['execution_error']}\n"
                 )
-                logger.debug(
-                    "[%s] Injecting retry hint: %s", self.name, state["execution_error"]
-                )
-
+                logger.debug("[%s] Injecting retry hint: %s", self.name, state["execution_error"])
 
             retry_hint += """
 --------------------------------------------------------------------------------
@@ -391,7 +376,7 @@ If the query cannot be constructed:
 {rpc_section}
 {retry_hint}
 Generate a query that answers the user's question.
-For GraphQL: use one of the given fields with appropriate filters and aggregations (if needed). 
+For GraphQL: use one of the given fields with appropriate filters and aggregations (if needed).
 Keep queries simple. Check for pagination. Pass numerical fields in quotes.
 
 {output_instructions}
@@ -409,9 +394,7 @@ Return ONLY the JSON object, no extra text or markdown."""
 
         # If upstream already flagged an error, skip validation
         if state.get("llm_error") or state.get("explanation"):
-            logger.debug(
-                "[%s] Skipping validation due to upstream error/refusal.", self.name
-            )
+            logger.debug("[%s] Skipping validation due to upstream error/refusal.", self.name)
             return {}
 
         if not state.get("query"):
@@ -469,8 +452,7 @@ Return ONLY the JSON object, no extra text or markdown."""
             if not self.rpc_methods:
                 return {
                     "validation_error": (
-                        'Envelope declares endpoint_type "rpc" but this agent has no '
-                        "RPC methods configured."
+                        'Envelope declares endpoint_type "rpc" but this agent has no RPC methods configured.'
                     ),
                     "success": False,
                 }
@@ -500,8 +482,7 @@ Return ONLY the JSON object, no extra text or markdown."""
 
         else:
             error_msg = (
-                f'Unknown or missing "endpoint_type" in envelope: {endpoint_type!r}. '
-                'Expected "graphql" or "rpc".'
+                f'Unknown or missing "endpoint_type" in envelope: {endpoint_type!r}. Expected "graphql" or "rpc".'
             )
             logger.warning("[%s] %s", self.name, error_msg)
             return {"validation_error": error_msg, "success": False}
@@ -531,24 +512,18 @@ Return ONLY the JSON object, no extra text or markdown."""
             method = descriptor.get("method")
             params = descriptor.get("params", {})
             path_params = descriptor.get("path_params", {})
-            success, result, error_msg = self.rpc_client.execute_query(
-                method, params, path_params
-            )
+            success, result, error_msg = self.rpc_client.execute_query(method, params, path_params)
         else:
             success, result, error_msg = self.graphql_client.execute_query(state["query"])
 
         if success:
-            logger.info(
-                "[%s] %s query executed successfully.", self.name, endpoint_type.upper()
-            )
+            logger.info("[%s] %s query executed successfully.", self.name, endpoint_type.upper())
             return {
-                "query_result": result, 
+                "query_result": result,
                 "execution_error": None,
-                }
+            }
 
-        logger.error(
-            "[%s] %s execution failed: %s", self.name, endpoint_type.upper(), error_msg
-        )
+        logger.error("[%s] %s execution failed: %s", self.name, endpoint_type.upper(), error_msg)
         return {"execution_error": error_msg}
 
     # ------------------------------------------------------------------
@@ -598,11 +573,7 @@ Return ONLY the JSON object, no extra text or markdown."""
 
         # Query build/validation failed – hard error
         if not final_state["success"]:
-            error = (
-                final_state.get("llm_error")
-                or final_state.get("validation_error")
-                or "Unknown error"
-            )
+            error = final_state.get("llm_error") or final_state.get("validation_error") or "Unknown error"
             logger.error(
                 "[%s] graph failed after %d attempts: %s",
                 self.name,
@@ -635,7 +606,7 @@ Return ONLY the JSON object, no extra text or markdown."""
         if endpoint_type == "rpc":
             this_method = RPC_METHODS.get(endpoint_method)
             used_method_description = f"Endpoint: {POCKET_NETWORK_RPC_ENDPOINT}\n"
-            used_method_description += this_method.description+"\n"
+            used_method_description += this_method.description + "\n"
             used_method_description += json.dumps(this_method.method_data, indent=4)
         else:
             used_method_description = f"Endpoint: {POCKET_NETWORK_DATA_ENDPOINT}\n"
@@ -663,9 +634,7 @@ Return ONLY the JSON object, no extra text or markdown."""
         if len(field_info.fields_notes) > 0:
             formated_field_info += "\t[Hint] Associated name meanings:"
             for field_name in field_info.fields_notes.keys():
-                formated_field_info += (
-                    f"\t\t{field_name}: {field_info.fields_notes[field_name]}\n"
-                )
+                formated_field_info += f"\t\t{field_name}: {field_info.fields_notes[field_name]}\n"
         return formated_field_info
 
 
@@ -679,17 +648,16 @@ class NetworkUsageAgent(QueryBuilderSubAgent):
     )
     name = "NetworkUsageAgent"
     graphql_methods = [
-            "getRewardsByDate",
-            "relayByBlockAndServices",
-            "getRelaysByServicePerPointJson",
-            "blocks",
-            "getAmountOfBlocksAndSuppliersByTimes",
-        ]
+        "getRewardsByDate",
+        "relayByBlockAndServices",
+        "getRelaysByServicePerPointJson",
+        "blocks",
+        "getAmountOfBlocksAndSuppliersByTimes",
+    ]
     rpc_methods = []
 
     def __init__(self, llm: ChatOpenAI):
         super().__init__(llm)
-
 
     def get_system_prompt(self) -> str:
         return """You are an expert query builder and executor for Pocket Network network usage analytics.
@@ -718,17 +686,17 @@ class TokenomicsAgent(QueryBuilderSubAgent):
     )
     name = "TokenomicsAgent"
     graphql_methods = [
-            "getTotalSupplyBetweenDates",
-            "getSupplyCompositionBetweenDates",
-            "getTotalSupplyByDay",
-            "getMintBreakdownBetweenDates",
-            "getBurnBreakdownBetweenDates",
-            "getComputeUnitsToTokensMultiplierEvolution",
-            "getDaoBalanceAtHeight",
-        ]
+        "getTotalSupplyBetweenDates",
+        "getSupplyCompositionBetweenDates",
+        "getTotalSupplyByDay",
+        "getMintBreakdownBetweenDates",
+        "getBurnBreakdownBetweenDates",
+        "getComputeUnitsToTokensMultiplierEvolution",
+        "getDaoBalanceAtHeight",
+    ]
     rpc_methods = [
-            "get_total_supply",
-        ]
+        "get_total_supply",
+    ]
 
     def __init__(self, llm: ChatOpenAI):
         super().__init__(llm)
@@ -760,23 +728,23 @@ class SettlementRewardsAgent(QueryBuilderSubAgent):
     name = "SettlementRewardsAgent"
 
     graphql_methods = [
-            "eventClaimSettleds",
-            "eventClaimExpireds",
-            "modToAcctTransfers",
-            "getClaimProofsDataByTime",
-            "getClaimProofsDataByDelegatorsAndTime",
-            "getRewardsByAddressesAndTimeGroupByService",
-            "getRewardsBySuppliersAndTimeGroupByAddressAndDate",
-            "getRewardsBySuppliersAndTimeGroupByService",
-        ]
+        "eventClaimSettleds",
+        "eventClaimExpireds",
+        "modToAcctTransfers",
+        "getClaimProofsDataByTime",
+        "getClaimProofsDataByDelegatorsAndTime",
+        "getRewardsByAddressesAndTimeGroupByService",
+        "getRewardsBySuppliersAndTimeGroupByAddressAndDate",
+        "getRewardsBySuppliersAndTimeGroupByService",
+    ]
     rpc_methods = [
-        "get_claim", 
-        "get_proof", 
+        "get_claim",
+        "get_proof",
         "get_session",
-        ]
+    ]
 
     def __init__(self, llm: ChatOpenAI):
-        super().__init__(llm)  
+        super().__init__(llm)
 
     def get_system_prompt(self) -> str:
         return """You are an expert query builder and executor for Pocket Network claim settlement and reward attribution.
@@ -807,20 +775,20 @@ class ServiceEconomicsAgent(QueryBuilderSubAgent):
     )
     name = "ServiceEconomicsAgent"
     graphql_methods = [
-            "services",
-            "relayByBlockAndServices",
-            "getRelaysByServicePerPointJson",
-            "getAmountOfBlocksAndSuppliersByTimes",
-            "eventRelayMiningDifficultyUpdateds",
-            "getRewardsByDomainsAndTimeGroupByService",
-            "getSupplierStatsByDomains",
-            "getRewardsBySuppliersAndTimeGroupByService",
-        ]
+        "services",
+        "relayByBlockAndServices",
+        "getRelaysByServicePerPointJson",
+        "getAmountOfBlocksAndSuppliersByTimes",
+        "eventRelayMiningDifficultyUpdateds",
+        "getRewardsByDomainsAndTimeGroupByService",
+        "getSupplierStatsByDomains",
+        "getRewardsBySuppliersAndTimeGroupByService",
+    ]
     rpc_methods = [
-        "get_all_services", 
-        "get_service", 
+        "get_all_services",
+        "get_service",
         "get_relay_mining_difficulty",
-        ]
+    ]
 
     def __init__(self, llm: ChatOpenAI):
         super().__init__(llm)
@@ -851,23 +819,23 @@ class GovernanceAdminAgent(QueryBuilderSubAgent):
     )
     name = "GovernanceAdminAgent"
     graphql_methods = [
-            "params",
-            "authzs",
-            "getDaoBalanceAtHeight",
-            "services",
-        ]
+        "params",
+        "authzs",
+        "getDaoBalanceAtHeight",
+        "services",
+    ]
     rpc_methods = [
-            "get_application_params",
-            "get_gateway_params",
-            "get_supplier_params",
-            "get_service_params",
-            "get_session_params",
-            "get_proof_params",
-            "get_migration_params",
-            "get_shared_params",
-            "get_tokenomics_params",
-        ]
-    
+        "get_application_params",
+        "get_gateway_params",
+        "get_supplier_params",
+        "get_service_params",
+        "get_session_params",
+        "get_proof_params",
+        "get_migration_params",
+        "get_shared_params",
+        "get_tokenomics_params",
+    ]
+
     def __init__(self, llm: ChatOpenAI):
         super().__init__(llm)
 
@@ -896,29 +864,29 @@ class StakingParticipantStateAgent(QueryBuilderSubAgent):
     )
     name = "StakingParticipantStateAgent"
     graphql_methods = [
-            "suppliers",
-            "msgStakeApplications",
-            "msgStakeGateways",
-            "msgStakeSupplierServices",
-            "getDataByDelegatorAddressesAndTimes",
-            "getDataByDelegatorAddressesAndBlocks",
-            "getOverservicedByAddressesAndTime",
-            "eventApplicationOverserviceds",
-            "eventGatewayUnbondingBegins",
-            "eventGatewayUnbondingEnds",
-            "eventSupplierUnbondingBegins",
-            "eventSupplierUnbondingEnds",
-            "eventApplicationUnbondingBegins",
-            "eventApplicationUnbondingEnds",
-            "eventSupplierSlasheds",
-        ]
+        "suppliers",
+        "msgStakeApplications",
+        "msgStakeGateways",
+        "msgStakeSupplierServices",
+        "getDataByDelegatorAddressesAndTimes",
+        "getDataByDelegatorAddressesAndBlocks",
+        "getOverservicedByAddressesAndTime",
+        "eventApplicationOverserviceds",
+        "eventGatewayUnbondingBegins",
+        "eventGatewayUnbondingEnds",
+        "eventSupplierUnbondingBegins",
+        "eventSupplierUnbondingEnds",
+        "eventApplicationUnbondingBegins",
+        "eventApplicationUnbondingEnds",
+        "eventSupplierSlasheds",
+    ]
     rpc_methods = [
-            "get_active_validators",
-            "get_application",
-            "get_gateway",
-            "get_all_gateways",
-            "get_supplier",
-        ]
+        "get_active_validators",
+        "get_application",
+        "get_gateway",
+        "get_all_gateways",
+        "get_supplier",
+    ]
 
     def __init__(self, llm: ChatOpenAI):
         super().__init__(llm)
@@ -947,12 +915,12 @@ class AccountStateAgent(QueryBuilderSubAgent):
         "governance, or any named protocol actor."
     )
     graphql_methods = [
-            "balances",
-        ]
+        "balances",
+    ]
     rpc_methods = [
-            "get_account_balance",
-            "get_morse_claimable_account",
-        ]
+        "get_account_balance",
+        "get_morse_claimable_account",
+    ]
 
     def __init__(self, llm: ChatOpenAI):
         super().__init__(llm)
@@ -968,6 +936,7 @@ Hint – get_account_balance requires the address as a path parameter substitute
 Hint – get_morse_claimable_account requires the Morse hex address as a path parameter.
 """
 
+
 ALL_SUBAGENTS = [
     GovernanceAdminAgent,
     NetworkUsageAgent,
@@ -977,6 +946,7 @@ ALL_SUBAGENTS = [
     TokenomicsAgent,
     AccountStateAgent,
 ]
+
 
 def create_sub_agents(llm: ChatOpenAI) -> List[QueryBuilderSubAgent]:
     """Create all available sub-agents."""

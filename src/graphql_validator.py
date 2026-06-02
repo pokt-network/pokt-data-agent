@@ -1,7 +1,9 @@
 """GraphQL query validation."""
 
+from typing import Optional, Tuple
+
 from graphql import parse, print_ast
-from typing import Tuple, Optional
+
 from src.graphql_client import GRAPHQL_REGISTRY
 
 
@@ -17,7 +19,7 @@ def validate_graphql_query(query: str, selected_method: str) -> Tuple[bool, str,
     """
     if GRAPHQL_REGISTRY.get(selected_method, None) is None:
         return False, "", "Selected method not in the available methods list."
-    
+
     try:
         # Parse the query to validate syntax
         document = parse(query)

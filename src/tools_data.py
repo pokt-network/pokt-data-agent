@@ -1,13 +1,14 @@
 """LangChain data tools for pocket network data (general)."""
 
 import logging
+from typing import Any, Dict, List, Optional, Tuple
+
 from langchain_core.tools import tool
 
-from src.query_sub_agents import ALL_SUBAGENTS
-from src.rpc_client import RPC_METHODS, PocketNetworkRPCClient
 from src.graphql_client import GRAPHQL_REGISTRY, PocketNetworkAPIClient
 from src.models import QueryFieldInfo
-from typing import Any, Dict, Optional, Tuple, List
+from src.query_sub_agents import ALL_SUBAGENTS
+from src.rpc_client import RPC_METHODS, PocketNetworkRPCClient
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 ################################################################################
 # ----------------------------- LISTING TOOLS ----------------------------------
 ################################################################################
-partitions_dict = {a.name.split("Agent")[0]:a for a in ALL_SUBAGENTS}
+partitions_dict = {a.name.split("Agent")[0]: a for a in ALL_SUBAGENTS}
 partitions_list = ""
 for a in partitions_dict.keys():
     partitions_list += f"-{a}\n"
@@ -24,7 +25,7 @@ LIST_VALID_METHODS_DESCRIPTION = f"""Return all valid methods from the Pocket Ne
 The list is divided by partition, and the returned methdos is a curated list of methods holding correct data. Select one from:
 {partitions_list}
 
-Please note: 
+Please note:
 - GraphQL endpoint have indexed data which is prefered for complex queries.
 - Use RPC when you need only real time (last block) data for simple requests.
 - Once you selected a method, consider calling \"data_get_method_data\" to obtain more information about it.
@@ -34,13 +35,15 @@ Args:
     protocol: the name of the requested protocol GraphQL or RPC.
 """
 LIST_VALID_METHODS_NAME = "data_get_valid_methods_by_category"
+
+
 @tool(LIST_VALID_METHODS_NAME, description=LIST_VALID_METHODS_DESCRIPTION)
 def list_valid_methods(partition_name: str, protocol: str) -> List[str]:
     # Check protocol
     protocol = protocol.lower()
-    valid_protocols = ["rpc","graphql"]    
+    valid_protocols = ["rpc", "graphql"]
     if protocol not in valid_protocols:
-        raise RuntimeError(f"Cannot find selected protocol: \"{protocol}\". Please choose from: {valid_protocols}")
+        raise RuntimeError(f'Cannot find selected protocol: "{protocol}". Please choose from: {valid_protocols}')
 
     # Get the reference sub agent for the selected data partition
     subagent_ref = None
@@ -48,10 +51,11 @@ def list_valid_methods(partition_name: str, protocol: str) -> List[str]:
         if partition.lower() == partition_name.strip().lower():
             subagent_ref = partitions_dict[partition]
     if subagent_ref is None:
-        raise RuntimeError(f"Cannot find selected data partition: \"{partition_name}\". Please choose from: {list(partitions_dict.keys())}")
-    
+        raise RuntimeError(
+            f'Cannot find selected data partition: "{partition_name}". Please choose from: {list(partitions_dict.keys())}'
+        )
+
     # Get all the methods and registry from this agent
-    out_list = dict()
     if protocol == "graphql":
         methods_list = subagent_ref.graphql_methods
         registry = GRAPHQL_REGISTRY
@@ -60,25 +64,27 @@ def list_valid_methods(partition_name: str, protocol: str) -> List[str]:
         registry = RPC_METHODS
     else:
         raise ValueError("Internal Error [T1]")
-    
+
     # Build output
     return [registry.get(m).name for m in methods_list]
 
 
-GET_METHOD_DATA_DESCRIPTION = f"""Return data (description, meanings, examples, etc) for a Pocket Network GraphQL or RPC API method.
+GET_METHOD_DATA_DESCRIPTION = """Return data (description, meanings, examples, etc) for a Pocket Network GraphQL or RPC API method.
 
 Args:
     method_name: The name of the requested method (case-sensitive).
     protocol: the name of the requested protocol GraphQL or RPC.
 """
 GET_METHOD_DATA_NAME = "data_get_method_data"
+
+
 @tool(GET_METHOD_DATA_NAME, description=GET_METHOD_DATA_DESCRIPTION)
 def get_method_data(method_name: str, protocol: str) -> QueryFieldInfo:
     # Check protocol
     protocol = protocol.lower()
-    valid_protocols = ["rpc","graphql"]    
+    valid_protocols = ["rpc", "graphql"]
     if protocol not in valid_protocols:
-        raise RuntimeError(f"Cannot find selected protocol: \"{protocol}\". Please choose from: {valid_protocols}")
+        raise RuntimeError(f'Cannot find selected protocol: "{protocol}". Please choose from: {valid_protocols}')
 
     # Get selected registry
     if protocol == "graphql":
@@ -87,14 +93,17 @@ def get_method_data(method_name: str, protocol: str) -> QueryFieldInfo:
         registry = RPC_METHODS
     else:
         raise ValueError("Internal Error [T1]")
-    
+
     # Get the method data from registry
     methods_data = registry.get(method_name, None)
     if methods_data is None:
-        raise RuntimeError(f"Selected method \"{method_name}\" not found in the list of curated enpoints in the selected protocol \"{protocol}\". Please note that method names are case-sensitive.")
+        raise RuntimeError(
+            f'Selected method "{method_name}" not found in the list of curated enpoints in the selected protocol "{protocol}". Please note that method names are case-sensitive.'
+        )
 
     # Return all data
     return methods_data
+
 
 ################################################################################
 # ---------------------------- EXECUTION TOOLS ---------------------------------
@@ -109,10 +118,13 @@ Returns:
     Tuple of (success, result, error_message)
 """
 EXECUTE_GRAPHQL_NAME = "data_execute_graphql"
+
+
 @tool(EXECUTE_GRAPHQL_NAME, description=EXECUTE_GRAPHQL_DESCRIPTION)
-def execute_graphql(query: str) -> Tuple[bool, Any, str|None]:
+def execute_graphql(query: str) -> Tuple[bool, Any, str | None]:
     # Execute (this is just a wrapper)
     return PocketNetworkAPIClient().execute_query(query)
+
 
 EXECUTE_RPC_DESCRIPTION = """Executes a RPC method call and returns the result (json response) along with a sucess flag and an error string if not success.
 
@@ -133,12 +145,13 @@ Raises:
                 path_params are provided.
 """
 EXECUTE_RPC_NAME = "data_execute_rpc"
+
+
 @tool(EXECUTE_RPC_NAME, description=EXECUTE_RPC_DESCRIPTION)
 def execute_rpc(
     method_name: str,
     params: Optional[Dict[str, Any]] = None,
     path_params: Optional[Dict[str, str]] = None,
-    ) -> Tuple[bool, Any, Optional[str|None]]:
+) -> Tuple[bool, Any, Optional[str | None]]:
     # Execute (this is just a wrapper)
     return PocketNetworkRPCClient().execute_query(method_name, params, path_params)
-

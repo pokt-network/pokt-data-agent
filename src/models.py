@@ -1,7 +1,7 @@
 """Data models for the Pocket Network agent."""
 
 from dataclasses import dataclass, field
-from typing import Any, Optional, List, Dict
+from typing import Any, Dict, Optional
 
 
 @dataclass
@@ -32,19 +32,19 @@ class SubAgentResult:
 
     query: str
     explanation: str
-    success: bool    
+    success: bool
     error: Optional[str] = None
     endpoint_type: str = "graphql"
     used_method_description: str = ""
     # Raw data returned by the GraphQL or RPC client after execution.
     # None when success is False.
     query_result: Optional[Any] = None
-    
+
 
 @dataclass
 class SubAgentTextResult:
     """Result from a sub-agent raw data retriever."""
 
     response: str
-    success: bool    
+    success: bool
     error: Optional[str] = None

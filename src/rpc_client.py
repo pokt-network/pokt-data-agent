@@ -1,18 +1,17 @@
 """REST/RPC client for the Pocket Network Sauron API (Cosmos SDK endpoints)."""
 
 import json
-import re
-import requests
-from typing import Any, Dict, Optional, Tuple
 import os
-from src.models import QueryFieldInfo
+import re
+from typing import Any, Dict, Optional, Tuple
 
+import requests
+
+from src.models import QueryFieldInfo
 
 POCKET_NETWORK_RPC_ENDPOINT = os.getenv("POCKET_NETWORK_RPC_ENDPOINT", None)
 if POCKET_NETWORK_RPC_ENDPOINT is None:
-    raise ValueError(
-        'The "POCKET_NETWORK_RPC_ENDPOINT" enviroment variable is not set.'
-    )
+    raise ValueError('The "POCKET_NETWORK_RPC_ENDPOINT" enviroment variable is not set.')
 
 # ---------------------------------------------------------------------------
 # Known RPC methods (Cosmos SDK REST paths supported by Sauron)
@@ -25,7 +24,7 @@ RPC_METHODS = {
     # ------------------------------------------------------------------
     "get_active_validators": QueryFieldInfo(
         name="get_active_validators",
-        description= (
+        description=(
             "Returns the list of active (bonded) validators on the network. "
             "Each validator entry includes operator_address, consensus_pubkey, "
             "status, tokens (staked amount in upokt), delegator_shares, "
@@ -40,7 +39,7 @@ RPC_METHODS = {
                 "pagination.limit": 1000,
             },
         },
-    ),  
+    ),
     # ------------------------------------------------------------------
     # Cosmos bank
     # ------------------------------------------------------------------
@@ -145,10 +144,7 @@ RPC_METHODS = {
     ),
     "get_gateway_params": QueryFieldInfo(
         name="get_gateway_params",
-        description=(
-            "Returns the current governance parameters of the gateway module, "
-            "such as min_stake."
-        ),
+        description=("Returns the current governance parameters of the gateway module, such as min_stake."),
         method_data={
             "http_method": "GET",
             "path": "/pokt-network/poktroll/gateway/params",
@@ -191,8 +187,7 @@ RPC_METHODS = {
     "get_supplier_params": QueryFieldInfo(
         name="get_supplier_params",
         description=(
-            "Returns the current governance parameters of the supplier module, "
-            "such as min_stake and staking_fee."
+            "Returns the current governance parameters of the supplier module, such as min_stake and staking_fee."
         ),
         method_data={
             "http_method": "GET",
@@ -260,10 +255,7 @@ RPC_METHODS = {
     ),
     "get_service_params": QueryFieldInfo(
         name="get_service_params",
-        description=(
-            "Returns the current governance parameters of the service module, "
-            "such as add_service_fee."
-        ),
+        description=("Returns the current governance parameters of the service module, such as add_service_fee."),
         method_data={
             "http_method": "GET",
             "path": "/pokt-network/poktroll/service/params",
@@ -293,8 +285,7 @@ RPC_METHODS = {
     "get_session_params": QueryFieldInfo(
         name="get_session_params",
         description=(
-            "Returns the current governance parameters of the session module, "
-            "such as num_blocks_per_session."
+            "Returns the current governance parameters of the session module, such as num_blocks_per_session."
         ),
         method_data={
             "http_method": "GET",
@@ -433,7 +424,7 @@ RPC_METHODS = {
             "Returns the Morse claimable account record for a specific Morse address. "
             "Useful to check whether a particular Morse account has already been "
             "claimed on Shannon."
-            "Provide the Morse address as the path parameter {address} (remove leading \"0x\" from it). "
+            'Provide the Morse address as the path parameter {address} (remove leading "0x" from it). '
         ),
         method_data={
             "http_method": "GET",
@@ -444,8 +435,7 @@ RPC_METHODS = {
     "get_migration_params": QueryFieldInfo(
         name="get_migration_params",
         description=(
-            "Returns the current governance parameters of the migration module, "
-            "such as morse_account_claim_is_enabled."
+            "Returns the current governance parameters of the migration module, such as morse_account_claim_is_enabled."
         ),
         method_data={
             "http_method": "GET",
@@ -494,16 +484,12 @@ class PocketNetworkRPCClient:
         # Check for missing required parameters
         missing_params = placeholders - set(path_params.keys())
         if missing_params:
-            raise ValueError(
-                f"Missing required path parameters: {sorted(missing_params)}"
-            )
+            raise ValueError(f"Missing required path parameters: {sorted(missing_params)}")
 
         # Check for unused parameters
         unused_params = set(path_params.keys()) - placeholders
         if unused_params:
-            raise ValueError(
-                f"Unused path parameters provided: {sorted(unused_params)}"
-            )
+            raise ValueError(f"Unused path parameters provided: {sorted(unused_params)}")
 
         # Substitute all parameters
         result = path
@@ -517,7 +503,7 @@ class PocketNetworkRPCClient:
         method_name: str,
         params: Optional[Dict[str, Any]] = None,
         path_params: Optional[Dict[str, str]] = None,
-    ) -> Tuple[bool, Any, Optional[str|None]]:
+    ) -> Tuple[bool, Any, Optional[str | None]]:
         """
         Execute a named RPC call against the Sauron API.
 
@@ -542,10 +528,9 @@ class PocketNetworkRPCClient:
             return (
                 False,
                 None,
-                f"Unknown RPC method '{method_name}'. "
-                f"Available: {list(RPC_METHODS.keys())}",
+                f"Unknown RPC method '{method_name}'. Available: {list(RPC_METHODS.keys())}",
             )
-        
+
         # Get this method data
         method_data = method_def.method_data
 
@@ -603,4 +588,3 @@ class PocketNetworkRPCClient:
             return False, None, f"Invalid JSON response from RPC: {str(e)}"
         except Exception as e:
             return False, None, f"Unexpected error: {str(e)}"
-

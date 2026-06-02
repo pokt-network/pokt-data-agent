@@ -65,7 +65,7 @@ def validate_rpc_call(raw: str) -> Tuple[bool, Dict[str, Any], Optional[str]]:
             {},
             f"'params' must be a JSON object (dict), got {type(params).__name__}.",
         )
-    
+
     # --- 4. Optional 'params' field -------------------------------------
     path_params = descriptor.get("path_params", {})
     if not isinstance(path_params, dict):

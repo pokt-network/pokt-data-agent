@@ -1,6 +1,7 @@
 """LangChain introspection tools for querying the Pocket Network GraphQL schema."""
 
 import logging
+import os
 from typing import Any, Dict
 
 import requests
@@ -8,13 +9,9 @@ from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
 
-import os
-
 _ENDPOINT = os.getenv("POCKET_NETWORK_DATA_ENDPOINT", None)
 if _ENDPOINT is None:
-    raise ValueError(
-        'The "POCKET_NETWORK_DATA_ENDPOINT" enviroment variable is not set.'
-    )
+    raise ValueError('The "POCKET_NETWORK_DATA_ENDPOINT" enviroment variable is not set.')
 
 _CACHE: Dict[str, Any] = {}
 
@@ -66,9 +63,7 @@ def _get_type_fields(type_name: str) -> list:
     if cache_key in _CACHE:
         return _CACHE[cache_key]
 
-    type_frag = (
-        "name kind ofType { name kind ofType { name kind ofType { name kind } } }"
-    )
+    type_frag = "name kind ofType { name kind ofType { name kind ofType { name kind } } }"
 
     # Call 1: field names + their return types
     data = _introspect(
@@ -84,14 +79,9 @@ def _get_type_fields(type_name: str) -> list:
     if type_info.get("kind") == "OBJECT" and fields:
         try:
             args_data = _introspect(
-                f'{{ __type(name: "{type_name}") {{ '
-                f"fields {{ name args {{ name type {{ {type_frag} }} }} }} "
-                f"}} }}"
+                f'{{ __type(name: "{type_name}") {{ fields {{ name args {{ name type {{ {type_frag} }} }} }} }} }}'
             )
-            args_by_field = {
-                f["name"]: f.get("args", [])
-                for f in (args_data.get("__type") or {}).get("fields") or []
-            }
+            args_by_field = {f["name"]: f.get("args", []) for f in (args_data.get("__type") or {}).get("fields") or []}
             for f in fields:
                 f["args"] = args_by_field.get(f["name"], [])
         except Exception:
@@ -116,6 +106,8 @@ Args:
     field_name: Name of the top-level query field, e.g. "eventClaimSettleds"
 """
 GET_FIELD_SCHEMA_NAME = "data_get_field_schema"
+
+
 @tool(GET_FIELD_SCHEMA_NAME, description=GET_FIELD_SCHEMA_DESCRIPTION)
 def get_field_schema(field_name: str) -> str:
     cache_key = f"field_schema:{field_name}"
@@ -128,9 +120,7 @@ def get_field_schema(field_name: str) -> str:
     # 1. Get all Query fields (cached separately)
     query_fields_key = "_query_fields"
     if query_fields_key not in _CACHE:
-        type_fragment = (
-            "name kind ofType { name kind ofType { name kind ofType { name kind } } }"
-        )
+        type_fragment = "name kind ofType { name kind ofType { name kind ofType { name kind } } }"
         data = _introspect(
             f'{{ __type(name: "Query") {{ fields {{ name description '
             f"args {{ name type {{ {type_fragment} }} }} "
@@ -172,28 +162,13 @@ def get_field_schema(field_name: str) -> str:
                 args = rf.get("args") or []
                 args_str = ""
                 if args:
-                    args_str = (
-                        "("
-                        + ", ".join(
-                            f"{a['name']}: {_resolve_type_name(a['type'])}"
-                            for a in args
-                        )
-                        + ")"
-                    )
-                return_fields_lines.append(
-                    f"  - {rf['name']}{args_str}: {rf_type}{desc}"
-                )
+                    args_str = "(" + ", ".join(f"{a['name']}: {_resolve_type_name(a['type'])}" for a in args) + ")"
+                return_fields_lines.append(f"  - {rf['name']}{args_str}: {rf_type}{desc}")
         except Exception as exc:
-            return_fields_lines.append(
-                f"  (could not resolve return type fields: {exc})"
-            )
+            return_fields_lines.append(f"  (could not resolve return type fields: {exc})")
 
     args_block = "\n".join(args_lines) if args_lines else "  (none)"
-    return_block = (
-        "\n".join(return_fields_lines)
-        if return_fields_lines
-        else "  (scalar or unresolvable)"
-    )
+    return_block = "\n".join(return_fields_lines) if return_fields_lines else "  (scalar or unresolvable)"
 
     result = (
         f"Field: {field_name}\n"
@@ -207,6 +182,7 @@ def get_field_schema(field_name: str) -> str:
     logger.debug("[tools] get_field_schema(%r) result:\n%s", field_name, result)
     return result
 
+
 GET_TYPE_INFO_DESCRIPTION = """Return all fields (and their types) for any named GraphQL type.
 
 Works for OBJECT types (e.g. "EventClaimSettled", "Block", "Supplier") and
@@ -218,6 +194,8 @@ Args:
     type_name: Exact GraphQL type name, e.g. "EventClaimSettledFilter"
 """
 GET_TYPE_INFO_NAME = "data_get_type_info"
+
+
 @tool(GET_TYPE_INFO_NAME, description=GET_TYPE_INFO_DESCRIPTION)
 def get_type_info(type_name: str) -> str:
     cache_key = f"type:{type_name}"
@@ -227,9 +205,7 @@ def get_type_info(type_name: str) -> str:
 
     logger.info("[tools] get_type_info(%r) – fetching from API", type_name)
 
-    type_frag = (
-        "name kind ofType { name kind ofType { name kind ofType { name kind } } }"
-    )
+    type_frag = "name kind ofType { name kind ofType { name kind ofType { name kind } } }"
 
     # Call 1: field/inputField names + types (no args to keep query small)
     data = _introspect(
@@ -254,9 +230,7 @@ def get_type_info(type_name: str) -> str:
     if kind == "OBJECT" and fields:
         try:
             args_data = _introspect(
-                f'{{ __type(name: "{type_name}") {{ '
-                f"fields {{ name args {{ name type {{ {type_frag} }} }} }} "
-                f"}} }}"
+                f'{{ __type(name: "{type_name}") {{ fields {{ name args {{ name type {{ {type_frag} }} }} }} }} }}'
             )
             for f in (args_data.get("__type") or {}).get("fields") or []:
                 args_by_field[f["name"]] = f.get("args") or []
@@ -270,28 +244,17 @@ def get_type_info(type_name: str) -> str:
         args = args_by_field.get(f["name"], [])
         args_str = ""
         if args:
-            args_str = (
-                "("
-                + ", ".join(
-                    f"{a['name']}: {_resolve_type_name(a['type'])}" for a in args
-                )
-                + ")"
-            )
+            args_str = "(" + ", ".join(f"{a['name']}: {_resolve_type_name(a['type'])}" for a in args) + ")"
         field_lines.append(f"  - {f['name']}{args_str}: {type_str}{desc}")
 
     fields_block = "\n".join(field_lines) if field_lines else "  (no fields)"
 
-    result = (
-        f"Type: {type_name} ({kind})\n"
-        f"Description: {description}\n"
-        f"Fields:\n{fields_block}"
-    )
+    result = f"Type: {type_name} ({kind})\nDescription: {description}\nFields:\n{fields_block}"
 
     _CACHE[cache_key] = result
-    logger.debug(
-        "[tools] get_type_info(%r) result length=%d chars", type_name, len(result)
-    )
+    logger.debug("[tools] get_type_info(%r) result length=%d chars", type_name, len(result))
     return result
+
 
 GET_ENUM_VALUES_DESCRIPTION = """Return all valid values for a GraphQL ENUM type.
 
@@ -302,6 +265,8 @@ Args:
     enum_name: Exact GraphQL enum type name, e.g. "EventClaimSettledGroupBy"
 """
 GET_ENUM_VALUES_NAME = "data_get_enum_values"
+
+
 @tool(GET_ENUM_VALUES_NAME, description=GET_ENUM_VALUES_DESCRIPTION)
 def get_enum_values(enum_name: str) -> str:
     cache_key = f"enum:{enum_name}"

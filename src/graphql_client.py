@@ -1,13 +1,17 @@
 """GraphQL API client for Pocket Network."""
 
-import requests
-from typing import Dict, Any, Tuple
-from src.models import QueryFieldInfo
 import json
 import os
+from typing import Any, Tuple
+
+import requests
+
+from src.models import QueryFieldInfo
+
 POCKET_NETWORK_DATA_ENDPOINT = os.getenv("POCKET_NETWORK_DATA_ENDPOINT", None)
 if POCKET_NETWORK_DATA_ENDPOINT is None:
-    raise ValueError("The \"POCKET_NETWORK_DATA_ENDPOINT\" enviroment variable is not set.")
+    raise ValueError('The "POCKET_NETWORK_DATA_ENDPOINT" enviroment variable is not set.')
+
 
 class PocketNetworkAPIClient:
     """Client for querying the Pocket Network GraphQL API."""
@@ -21,7 +25,7 @@ class PocketNetworkAPIClient:
         """
         self.endpoint = endpoint
 
-    def execute_query(self, query: str) -> Tuple[bool, Any, str|None]:
+    def execute_query(self, query: str) -> Tuple[bool, Any, str | None]:
         """
         Execute a GraphQL query against the Pocket Network API.
 
@@ -38,9 +42,7 @@ class PocketNetworkAPIClient:
 
             payload = {"query": query}
 
-            response = requests.post(
-                self.endpoint, json=payload, headers=headers, timeout=30
-            )
+            response = requests.post(self.endpoint, json=payload, headers=headers, timeout=30)
 
             # Raise for HTTP errors
             response.raise_for_status()
@@ -49,9 +51,7 @@ class PocketNetworkAPIClient:
 
             # Check for GraphQL errors
             if "errors" in data and data["errors"]:
-                error_msg = "GraphQL errors: " + "; ".join(
-                    [str(err) for err in data["errors"]]
-                )
+                error_msg = "GraphQL errors: " + "; ".join([str(err) for err in data["errors"]])
                 return False, None, error_msg
 
             if "data" in data:
@@ -75,8 +75,6 @@ class PocketNetworkAPIClient:
             return False, None, f"Invalid JSON response from API: {str(e)}"
         except Exception as e:
             return False, None, f"Unexpected error: {str(e)}"
-
-
 
 
 # Registry of available GraphQL query fields with descriptions
@@ -159,9 +157,7 @@ GRAPHQL_REGISTRY = {
     "msgStakeApplications": QueryFieldInfo(
         name="msgStakeApplications",
         description="Provides data for Applications staking events, these are usefull to track if/when an app was staked and also to see when it was loaded with more tokens for requesting traffic (stake tokens are burned due to traffic so they must re-stake from time to time).",
-        fields_notes={
-            "stakeAmount": "Total upokt staked/re-staked by the application."
-        },
+        fields_notes={"stakeAmount": "Total upokt staked/re-staked by the application."},
     ),
     "msgStakeGateways": QueryFieldInfo(
         name="msgStakeGateways",
@@ -224,7 +220,7 @@ GRAPHQL_REGISTRY = {
         fields_notes={
             "operatorId": "The address of the supplier.",
             "ownerId": "The address of the owner of the stake.",
-            "serviceConfigs": "Contains information about the staked services in this supplier."
+            "serviceConfigs": "Contains information about the staked services in this supplier.",
         },
     ),
     "getComputeUnitsToTokensMultiplierEvolution": QueryFieldInfo(
@@ -249,7 +245,7 @@ GRAPHQL_REGISTRY = {
         name="getSupplyCompositionBetweenDates",
         description="Returns a JSON list containing the detailed supply composition (staked in apps/services/gateways/suppliers, DAO treasury, wrapped pokt, etc) along with the total supply, the date and block of the data. Usefull for network-wide supply evolution analisys, total staked tokens analysis, total migrated tokens, etc.",
         fields_notes={
-            "truncInterval": "Set to \"day\" if the user is asking for current supply and use current date and day before for the date limits.",
+            "truncInterval": 'Set to "day" if the user is asking for current supply and use current date and day before for the date limits.',
         },
     ),
     "getTotalSupplyByDay": QueryFieldInfo(

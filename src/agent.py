@@ -31,9 +31,7 @@ class PocketNetworkAgent:
     NO_AGENT_HANDLE = "No sub-agent can handle the user query"
     AGENT_CANNOT_BUILD = "Sub-agent cannot build the user query"
 
-    def __init__(
-        self, llm_base_url: str = "http://localhost:8087", llm_model: str = "local"
-    ):
+    def __init__(self, llm_base_url: str = "http://localhost:8087", llm_model: str = "local"):
         logger.info(
             "Initialising PocketNetworkAgent (model=%s, url=%s)",
             llm_model,
@@ -90,9 +88,7 @@ class PocketNetworkAgent:
 
         user_query = state["user_query"]
 
-        agents_list_text = "".join(
-            f"\t- {a.name}: {a.description}\n" for a in self.sub_agents
-        )
+        agents_list_text = "".join(f"\t- {a.name}: {a.description}\n" for a in self.sub_agents)
 
         system_prompt = f"""
 You are a tool selection agent, your job is to select the appropriate sub-agent to handle the user query.
@@ -143,7 +139,8 @@ Respond ONLY with the selected agent name, if no sub-agent can fulfil the query,
                 "query": result.query,
                 "query_result": result.query_result,
                 "endpoint_type": result.endpoint_type,
-                "agent_notes": state.get("agent_notes", "") + f"\n {result.explanation}"
+                "agent_notes": state.get("agent_notes", "")
+                + f"\n {result.explanation}"
                 + "\n\nQuery built, validated, and executed successfully",
             }
 
@@ -186,7 +183,6 @@ Obtained data:
 
         return {"agent_notes": response.content.strip()}
 
-
     def _format_refusal(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Format an error/refusal response for the user."""
         logger.info("--- format_refusal ---")
@@ -195,13 +191,8 @@ Obtained data:
         error = state.get("error", "")
 
         if error == self.NO_AGENT_HANDLE:
-            agents_list_text = "".join(
-                f"\t- {a.name}: {a.description}\n" for a in self.sub_agents
-            )
-            error_message = (
-                "The query did not match any of the following agents:\n"
-                + agents_list_text
-            )
+            agents_list_text = "".join(f"\t- {a.name}: {a.description}\n" for a in self.sub_agents)
+            error_message = "The query did not match any of the following agents:\n" + agents_list_text
         elif error == self.AGENT_CANNOT_BUILD:
             error_message = state.get("agent_notes", "")
         elif error and "GraphQL validation error" in error:
