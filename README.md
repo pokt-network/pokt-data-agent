@@ -1,6 +1,6 @@
 # Pocket Network Data MCP and Agent
 
-This repository contians two projects that are highly co-dependent:
+This repository contains two projects that are highly co-dependent:
 - The data endpoints' ([GraphQL](https://data.pocket.network/) and [RPC](https://sauron-api.infra.pocket.network)) Model Context Protocol (MCP).
 - The `Pocket Data Agent`, a standalone agent that solves natural language queries, based on LangGraph.
 
@@ -59,13 +59,13 @@ Set `POCKET_NETWORK_MCP_EXPOSURE` to control which tools are available:
 | Value | Tools |
 |---|---|
 | `endpoints-tools` | Direct GraphQL/RPC query + introspection tools, best for very powerful models |
-| `sub-agents` | Domain-specific sub-agent tools (network usage, tokenomics, rewards, etc.), usefull when you need to keep context cleaner |
+| `sub-agents` | Domain-specific sub-agent tools (network usage, tokenomics, rewards, etc.), useful when you need to keep context cleaner |
 | `main-agent` | Single main agent tool that auto-routes queries, use this to fully delegate the resolution of the queries |
 | `all-agents` | Main agent + all sub-agents (Normally not useful) |
 | `everything` | All tools combined (Just for testing, very redundant) |
 
-Keep in mind that enabling more tools loads the context of the agent with more tokens. If you are using a powerful model for your agent, the default `endpoints-tools` is probably the best option. If you are embeding this into a smaller agent using a smaller model, consider using `sub-agents` or `main-agent`, where the later is the most lightweight option.
-The intention behind having agents as tools is to help lightweight models to sepparate context when trying to solve a Pocket Network related question, the agents have a very specific execution prompts that will guide simpler language models in the resolution of queries. So, smaller agents can fully delegate into this tool and then recover the solved query.
+Keep in mind that enabling more tools loads the context of the agent with more tokens. If you are using a powerful model for your agent, the default `endpoints-tools` is probably the best option. If you are embedding this into a smaller agent using a smaller model, consider using `sub-agents` or `main-agent`, where the later is the most lightweight option.
+The intention behind having agents as tools is to help lightweight models to separate context when trying to solve a Pocket Network related question, the agents have a very specific execution prompts that will guide simpler language models in the resolution of queries. So, smaller agents can fully delegate into this tool and then recover the solved query.
 
 ## Available Tools
 
@@ -81,7 +81,7 @@ The intention behind having agents as tools is to help lightweight models to sep
 - `get_enum_values` — list valid enum values
 
 **Agent Tools** — natural language queries:
-- `mainagent` — auto-routes to the best sub-agent, soling the query completelly (`WIP`).
+- `mainagent` — auto-routes to the best sub-agent, soling the query completely (`WIP`).
 - `subagent_NetworkUsage` — network usage and relay data
 - `subagent_Tokenomics` — token supply and economics
 - `subagent_SettlementRewards` — rewards and settlement data
@@ -204,9 +204,9 @@ mcp_servers:
 **Note:** HermesAgent `timeout` is in **seconds** (default: 120). OpenCode and Claude Code use **milliseconds**.
 
 
-# Contibutiong 
+# Contributing 
 
-Contributions are welcome, either inthe form of new methods use cases and/or examples.
+Contributions are welcome, either in the form of new methods use cases and/or examples.
 
 ## Linting
 

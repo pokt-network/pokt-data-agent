@@ -11,6 +11,9 @@ wheels/
 # Virtual environments
 .venv
 
+# VSCode
+.vscode
+
 # Agents
 opencode.json
 
