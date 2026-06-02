@@ -1,11 +1,11 @@
-"""Poktscan Data Agent package."""
+"""Pocket Network Data Agent package."""
 
-from src.agent import PoktscanAgent
-from src.api_client import PoktscanAPIClient
-from src.validator import validate_graphql_query
+from src.agent import PocketNetworkAgent
+from src.graphql_client import PocketNetworkAPIClient
+from src.graphql_validator import validate_graphql_query
 
 __all__ = [
-    "PoktscanAgent",
-    "PoktscanAPIClient",
+    "PocketNetworkAgent",
+    "PocketNetworkAPIClient",
     "validate_graphql_query",
 ]

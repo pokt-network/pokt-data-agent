@@ -11,5 +11,8 @@ wheels/
 # Virtual environments
 .venv
 
+# Agents
+opencode.json
+
 # Others
 untracked
