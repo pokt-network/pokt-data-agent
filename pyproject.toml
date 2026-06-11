@@ -1,3 +1,10 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.backends.legacy:build"
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
 [project]
 name = "pokt-data-agent"
 version = "0.1.0"
