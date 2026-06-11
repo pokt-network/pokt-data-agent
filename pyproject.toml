@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
-pokt-data-agent-mcp = "mcp_server:main"
+pokt-data-agent-mcp = "src.cli:main"
 
 [dependency-groups]
 dev = [

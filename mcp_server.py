@@ -56,25 +56,11 @@ Environment variables (all optional for default mode):
 For remote/HTTP deployment see mcp_server_remote.py.
 """
 
-import logging
-
-from src.mcp_utils import create_mcp_server
-
-logging.basicConfig(level=logging.WARNING)
-
-# ---------------------------------------------------------------------------
-# Server instance
-# ---------------------------------------------------------------------------
-mcp = create_mcp_server()
+from src.cli import main
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
-
-
-def main():
-    mcp.run()  # stdio transport – default for Claude Code / OpenCode
-
 
 if __name__ == "__main__":
     main()
