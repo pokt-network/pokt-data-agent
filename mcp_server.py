@@ -3,43 +3,54 @@
 Intended for local use with Claude Code and OpenCode — the MCP client spawns
 this process directly via stdio.
 
-Usage – add to your MCP config:
+Quick start (no clone required) – Claude Code / Cowork:
+
+claude mcp add pokt-data-agent -- uvx --from git+https://github.com/pokt-foundation/pokt-data-agent pokt-data-agent-mcp
+
+  Or add manually to ~/.claude/claude_mcp_config.json:
+    {
+      "mcpServers": {
+        "pokt-data-agent": {
+          "command": "uvx",
+          "args": ["--from", "git+https://github.com/pokt-foundation/pokt-data-agent", "pokt-data-agent-mcp"]
+        }
+      }
+    }
+
+  No environment variables are required for the default endpoints-only mode
+  (POCKET_NETWORK_MCP_EXPOSURE=endpoints-tools).  LLM variables are only needed
+  when using agent tools (see POCKET_NETWORK_MCP_EXPOSURE below).
+
+Advanced – local clone (OpenCode / Claude Code):
 
   OpenCode (opencode.jsonc):
     {
       "mcp": {
         "pokt-data-agent": {
           "type": "local",
-          "command": ["uv", "run", "mcp_server.py"],
-          "environment": {
-            "LLM_BASE_URL": "https://api.openai.com/v1",
-            "LLM_MODEL":    "gpt-4o",
-            "OPENAI_API_KEY": "sk-..."
-          }
+          "command": ["uv", "run", "mcp_server.py"]
         }
       }
     }
 
-  Claude Code (.mcp.json or ~/.claude.json):
+  Claude Code (.mcp.json):
     {
       "mcpServers": {
         "pokt-data-agent": {
           "command": "uv",
           "args": ["run", "mcp_server.py"],
-          "cwd": "/path/to/pokt-data-agent",
-          "env": {
-            "LLM_BASE_URL":  "https://api.openai.com/v1",
-            "LLM_MODEL":     "gpt-4o",
-            "OPENAI_API_KEY": "sk-..."
-          }
+          "cwd": "/path/to/pokt-data-agent"
         }
       }
     }
 
-Environment variables:
-    LLM_BASE_URL   – Base URL for an OpenAI-compatible endpoint
-                     (default: http://localhost:8087)
-    LLM_MODEL      – Model name to use (default: local)
+Environment variables (all optional for default mode):
+    POCKET_NETWORK_MCP_EXPOSURE – Tool set to expose (default: endpoints-tools).
+                     Options: endpoints-tools | sub-agents | main-agent |
+                              all-agents | everything
+    LLM_BASE_URL   – Base URL for an OpenAI-compatible endpoint.
+                     Required only for agent tool modes.
+    LLM_MODEL      – Model name to use.  Required only for agent tool modes.
     OPENAI_API_KEY – API key forwarded to the LLM endpoint (default: not-needed)
 
 For remote/HTTP deployment see mcp_server_remote.py.
@@ -60,5 +71,10 @@ mcp = create_mcp_server()
 # Entry point
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+
+def main():
     mcp.run()  # stdio transport – default for Claude Code / OpenCode
+
+
+if __name__ == "__main__":
+    main()

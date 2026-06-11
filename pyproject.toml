@@ -17,6 +17,9 @@ dependencies = [
     "rich>=15.0.0",
 ]
 
+[project.scripts]
+pokt-data-agent-mcp = "mcp_server:main"
+
 [dependency-groups]
 dev = [
     "pre-commit>=4.0.0",

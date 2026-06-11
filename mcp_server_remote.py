@@ -54,13 +54,13 @@ Claude Code (.mcp.json or ~/.claude.json):
 Environment variables
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  Required:
-    MCP_API_KEY    – Static bearer token clients must send in the
-                     Authorization header.
-    LLM_BASE_URL   – Base URL for an OpenAI-compatible LLM endpoint.
-    LLM_MODEL      – Model name to use.
-
   Optional:
+    MCP_API_KEY    – Static bearer token clients must send in the
+                     Authorization header.  If unset, the server accepts
+                     unauthenticated requests (safe for local use only).
+    LLM_BASE_URL   – Base URL for an OpenAI-compatible LLM endpoint.
+                     Required only when using agent tools.
+    LLM_MODEL      – Model name to use.  Required only when using agent tools.
     OPENAI_API_KEY – API key forwarded to the LLM endpoint
                      (default: not-needed).
     MCP_HOST       – Bind address (default: 0.0.0.0).
@@ -89,30 +89,29 @@ logging.basicConfig(level=logging.WARNING)
 # ---------------------------------------------------------------------------
 
 
-def _require_api_key() -> str:
-    key = os.environ.get("MCP_API_KEY", "").strip()
-    if not key:
-        print(
-            "ERROR: MCP_API_KEY environment variable is not set. "
-            "Set it to a long random secret before starting the remote server.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    return key
+_EXPECTED_TOKEN: str | None = os.environ.get("MCP_API_KEY", "").strip() or None
 
-
-_EXPECTED_TOKEN = _require_api_key()
+if _EXPECTED_TOKEN is None:
+    print(
+        "WARNING: MCP_API_KEY is not set — server will accept unauthenticated requests. "
+        "Set MCP_API_KEY to a long random secret for any non-local deployment.",
+        file=sys.stderr,
+    )
 
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):
-    """Reject requests whose Authorization header doesn't match MCP_API_KEY."""
+    """Reject requests whose Authorization header doesn't match MCP_API_KEY.
+
+    When MCP_API_KEY is unset the middleware is a no-op, allowing unauthenticated
+    access — suitable for local / trusted-network use.
+    """
 
     async def dispatch(self, request: Request, call_next):
+        if _EXPECTED_TOKEN is None:
+            return await call_next(request)
+
         auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            token = auth_header[len("Bearer ") :]
-        else:
-            token = ""
+        token = auth_header[len("Bearer ") :] if auth_header.startswith("Bearer ") else ""
 
         # Use constant-time comparison to prevent timing attacks
         if not hmac.compare_digest(token.encode(), _EXPECTED_TOKEN.encode()):
