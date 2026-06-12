@@ -763,7 +763,7 @@ Always apply a filter when possible, such as a date range, address list, supplie
 If the user asks only for the total rewards of one or more addresses with no breakdown, prefer getRewardsByAddressesAndTime, which is the cheapest rollup.
 If the user asks for exact account earnings or the most granular payout view, prefer modToAcctTransfers.
 If the user asks for claim lifecycle health, use settlement and expiration events together with claim-proof summaries.
-If the user provides an address, it is usually a pokt1... entity. For reward attribution, distinguish carefully between output addresses, supplier/operator addresses, and delegator-related addresses.
+If the user provides an address, it is usually a pokt1... entity. For reward attribution, distinguish carefully between output addresses, supplier/operator addresses, and delegator-related addresses. A "delegator" of a supplier node is a rev_share address: an address configured in the supplier's rev_share, for a given service, that receives a share of its reward tokens (not a validator/consensus delegator).
 If the user asks for a “node” and the context is ambiguous, disambiguate between supplier and application.
 
 The user might use the following expressions:
@@ -872,7 +872,8 @@ class StakingParticipantStateAgent(QueryBuilderSubAgent):
     description = (
         "Monitors the lifecycle and health of staked participants, "
         "including application, gateway, supplier and validator staking, "
-        "delegator  performance, overservicing, unbonding flows, and "
+        "delegator performance (supplier rev_share addresses receiving a "
+        "share of the node rewards on a given service), overservicing, unbonding flows, and "
         "slashing events. Use this agent only when an specific participant "
         "data is reqeusted (i.e. validator, supplier, gateway, application, etc.)."
     )
@@ -901,6 +902,9 @@ class StakingParticipantStateAgent(QueryBuilderSubAgent):
     ]
     rpc_methods = [
         "get_active_validators",
+        "get_validator",
+        "get_validator_delegations",
+        "get_delegator_delegations",
         "get_application",
         "get_all_applications",
         "get_gateway",
@@ -921,7 +925,8 @@ Always apply a filter when possible, such as address, address list, time range, 
 If the user asks about application health, gateway status, or supplier lifecycle, combine stake history with overservicing and unbonding events.
 If the user asks for counts or total stake of applications, gateways, suppliers or validators, use the entity tables (applications, gateways, suppliers, validators) with a stakeStatus filter and aggregates instead of accumulating events.
 If the user asks which suppliers serve a service (or which services a supplier is staked in), use supplierServiceConfigs filtered by serviceId or supplierId.
-If the user asks about delegators, treat them as addresses providing stake to suppliers and use delegator-oriented summaries.
+If the user asks about delegators of a supplier node, treat them as the supplier's rev_share addresses: the addresses configured in the supplier rev_share that receive a share of its reward tokens (for a given service configured). Use the delegator-oriented summaries for them, and do not confuse them with validator (consensus) delegators.
+If the user asks about delegators of a validator (consensus delegations), use the RPC methods: get_validator_delegations for who delegates to a validator, and get_delegator_delegations for which validators an account delegates to.
 If the user asks for node state, disambiguate between supplier, gateway, and application based on context.
 
 """

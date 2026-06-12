@@ -44,6 +44,64 @@ RPC_METHODS = {
             '{"method_name": "get_active_validators"}',
         ],
     ),
+    "get_validator": QueryFieldInfo(
+        name="get_validator",
+        description=(
+            "Returns the full details of a single consensus validator identified "
+            "by its operator address (poktvaloper...). Fields: operator_address, "
+            "consensus_pubkey, jailed, status, tokens (staked upokt), "
+            "delegator_shares, description (moniker, website), commission rates "
+            "and min_self_delegation."
+            "Provide the poktvaloper... operator address as the path parameter {validator_address}. "
+        ),
+        method_data={
+            "http_method": "GET",
+            "path": "/cosmos/staking/v1beta1/validators/{validator_address}",
+            "default_params": {},
+        },
+        examples=[
+            "# Validator detail by operator address (goes in the URL path)\n"
+            '{"method_name": "get_validator", "path_params": {"validator_address": "poktvaloper1..."}}',
+        ],
+    ),
+    "get_validator_delegations": QueryFieldInfo(
+        name="get_validator_delegations",
+        description=(
+            "Returns all delegations made TO a consensus validator: the list of "
+            "delegator addresses with their shares and staked upokt balance. "
+            "These are validator (consensus/Cosmos staking) delegators, NOT the "
+            "rev_share delegators of supplier nodes."
+            "Provide the poktvaloper... operator address as the path parameter {validator_address}. "
+        ),
+        method_data={
+            "http_method": "GET",
+            "path": "/cosmos/staking/v1beta1/validators/{validator_address}/delegations",
+            "default_params": {"pagination.limit": 1000},
+        },
+        examples=[
+            "# Delegators of a validator, with their staked amounts\n"
+            '{"method_name": "get_validator_delegations", "path_params": {"validator_address": "poktvaloper1..."}}',
+        ],
+    ),
+    "get_delegator_delegations": QueryFieldInfo(
+        name="get_delegator_delegations",
+        description=(
+            "Returns all delegations made BY an account: which consensus "
+            "validators the address delegates to, with shares and staked upokt "
+            "balance per validator. These are validator (consensus/Cosmos "
+            "staking) delegations, NOT the rev_share delegations of supplier nodes."
+            "Provide the bech32 pokt1… account address as the path parameter {delegator_address}. "
+        ),
+        method_data={
+            "http_method": "GET",
+            "path": "/cosmos/staking/v1beta1/delegations/{delegator_address}",
+            "default_params": {"pagination.limit": 1000},
+        },
+        examples=[
+            "# Validators an account delegates to, with staked amounts\n"
+            '{"method_name": "get_delegator_delegations", "path_params": {"delegator_address": "pokt1..."}}',
+        ],
+    ),
     # ------------------------------------------------------------------
     # Cosmos bank
     # ------------------------------------------------------------------

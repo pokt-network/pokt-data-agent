@@ -340,12 +340,12 @@ GRAPHQL_REGISTRY = {
     ),
     "getClaimProofsDataByDelegatorsAndTime": QueryFieldInfo(
         name="getClaimProofsDataByDelegatorsAndTime",
-        description="Fast method for retrieving rewards received by an address or group of them in the given time with granularity, result returned per-address.",
+        description='Fast method for retrieving rewards received by an address or group of them in the given time with granularity, result returned per-address. The "delegators" in the name are supplier rev_share addresses: addresses configured in a supplier\'s rev_share that receive a share of its reward tokens (NOT validator/consensus delegators, nor owners of the stake).',
         fields_notes={
-            "addresses": 'A vector of addresses to query: ["pokt1....", "pokt1...."].',
+            "addresses": 'A vector of supplier rev_share addresses to query: ["pokt1....", "pokt1...."]. These are the addresses receiving reward tokens from suppliers.',
         },
         examples=[
-            "# Claims vs proofs time-series for specific addresses\n"
+            "# Claims vs proofs time-series for specific supplier rev_share addresses\n"
             'query { getClaimProofsDataByDelegatorsAndTime(addresses: ["pokt1..."], '
             'startTs: "2026-06-01T00:00:00Z", endTs: "2026-06-11T00:00:00Z", truncInterval: "day") }',
         ],
@@ -354,10 +354,10 @@ GRAPHQL_REGISTRY = {
         name="getRewardsByAddressesAndTimeGroupByService",
         description="Fast method for retrieving rewards received by an address or group of them, dividing the total rewards per service. Usefull for tracking which service is providing most gains.",
         fields_notes={
-            "addresses": 'A vector of addresses to query: ["pokt1....", "pokt1...."].',
+            "addresses": 'A vector of the rev-share addresses (the ones receiving tokens) to query: ["pokt1....", "pokt1...."].',
         },
         examples=[
-            "# Rewards of a group of addresses broken down by service\n"
+            "# Rewards of a group of rev-share addresses (the ones receiving tokens) broken down by service\n"
             'query { getRewardsByAddressesAndTimeGroupByService(addresses: ["pokt1..."], '
             'startTs: "2026-06-01T00:00:00Z", endTs: "2026-06-11T00:00:00Z") }',
         ],
@@ -366,7 +366,7 @@ GRAPHQL_REGISTRY = {
         name="getRewardsBySuppliersAndTimeGroupByAddressAndDate",
         description="Fast method for retrieving rewards received by an address or group of them, from an specific group of suppliers, in the given time with granularity. Usefull for tracking the amount of rewards that an output address received from the selected suppliers.",
         fields_notes={
-            "addresses": 'A vector of addresses to query: ["pokt1....", "pokt1...."]. These should be output address of the suppliers.',
+            "addresses": 'A vector of addresses to query: ["pokt1....", "pokt1...."]. These should be output addresses of the suppliers, i.e. their rev-share addresses (the ones receiving tokens from those suppliers).',
             "supplierAddresses": 'A vector of addresses to query: ["pokt1....", "pokt1...."]. These are the suppliers that are providing rewards to the "addresses".',
         },
     ),
@@ -393,18 +393,18 @@ GRAPHQL_REGISTRY = {
     ),
     "getDataByDelegatorAddressesAndTimes": QueryFieldInfo(
         name="getDataByDelegatorAddressesAndTimes",
-        description="Returns the total rewards, relays (claims and proofs) and slashes done by a delegator (an address providing stake to a supplier). Usefull to see data and status of an address that is delegating to a node, common in the permisionless staking mechanism of pokt. Observed period in timestamps",
+        description="Returns the total rewards, relays (claims and proofs) and slashes done by a delegator of a supplier node. A \"delegator\" here is a supplier rev_share address: an address listed in the supplier's service rev_share configuration that receives a share of that service from the supplier's reward tokens. Observed period in timestamps",
         examples=[
-            "# Operator rollup (rewards, claims/proofs, slashes) for addresses in a time window\n"
+            "# Operator rollup (rewards, claims/proofs, slashes) for supplier rev_share addresses in a time window\n"
             'query { getDataByDelegatorAddressesAndTimes(addresses: ["pokt1..."], '
             'startTs: "2026-06-01T00:00:00Z", endTs: "2026-06-11T00:00:00Z") }',
         ],
     ),
     "getDataByDelegatorAddressesAndBlocks": QueryFieldInfo(
         name="getDataByDelegatorAddressesAndBlocks",
-        description="Returns the total rewards, relays (claims and proofs) and slashes done by a delegator (an address providing stake to a supplier). Usefull to see data and status of an address that is delegating to a node, common in the permisionless staking mechanism of pokt. Observed period in block numbers.",
+        description="Returns the total rewards, relays (claims and proofs) and slashes done by a delegator of a supplier node. A \"delegator\" here is a supplier rev_share address: an address listed in the supplier's service rev_share configuration that receives a share of that service from the supplier's reward tokens. Observed period in block numbers.",
         examples=[
-            "# Operator rollup (rewards, claims/proofs, slashes) for addresses in a block range\n"
+            "# Operator rollup (rewards, claims/proofs, slashes) for supplier rev_share addresses in a block range\n"
             'query { getDataByDelegatorAddressesAndBlocks(addresses: ["pokt1..."], '
             'startHeight: "780000", endHeight: "790000") }',
         ],
@@ -622,10 +622,10 @@ GRAPHQL_REGISTRY = {
         name="getRewardsByAddressesAndTime",
         description="Fast method returning the plain total rewards (upokt) received by a group of addresses in a date range, with no grouping. This is the cheapest rewards rollup; use the GroupByService / GroupByAddressAndDate variants only when a breakdown is needed.",
         fields_notes={
-            "addresses": 'A vector of addresses to query: ["pokt1....", "pokt1...."].',
+            "addresses": 'A vector of rev-share addresses (the ones receiving tokens) to query: ["pokt1....", "pokt1...."].',
         },
         examples=[
-            "# Total rewards of a group of addresses in a date range (single number)\n"
+            "# Total rewards of a group of rev-share addresses (the ones receiving tokens) in a date range (single number)\n"
             'query { getRewardsByAddressesAndTime(addresses: ["pokt1..."], '
             'startDate: "2026-06-10T00:00:00Z", endDate: "2026-06-11T00:00:00Z") }',
         ],
