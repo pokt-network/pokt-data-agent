@@ -155,3 +155,32 @@ def execute_rpc(
 ) -> Tuple[bool, Any, Optional[str | None]]:
     # Execute (this is just a wrapper)
     return PocketNetworkRPCClient().execute_query(method_name, params, path_params)
+
+
+################################################################################
+# ------------------------------ GENERAL TOOLS ----------------------------------
+################################################################################
+
+GET_INDEXER_STATUS_DESCRIPTION = """Return the live status of the Pocket Network GraphQL indexer.
+
+Provides the chain target height, the last indexed (processed) height and timestamp, and a health flag.
+Use this to check how fresh the indexed (GraphQL) data is before trusting it: if "lastProcessedHeight"
+lags far behind "targetHeight", prefer RPC methods for live-state questions.
+
+Returns:
+    Tuple of (success, result, error_message) where result holds the "_metadata" fields:
+    targetHeight, lastProcessedHeight, lastProcessedTimestamp (epoch milliseconds),
+    lastFinalizedVerifiedHeight and indexerHealthy.
+"""
+GET_INDEXER_STATUS_NAME = "data_get_indexer_status"
+
+_INDEXER_STATUS_QUERY = (
+    "{ _metadata { targetHeight lastProcessedHeight lastProcessedTimestamp "
+    "lastFinalizedVerifiedHeight indexerHealthy } }"
+)
+
+
+@tool(GET_INDEXER_STATUS_NAME, description=GET_INDEXER_STATUS_DESCRIPTION)
+def get_indexer_status() -> Tuple[bool, Any, str | None]:
+    # Execute (this is just a wrapper)
+    return PocketNetworkAPIClient().execute_query(_INDEXER_STATUS_QUERY)

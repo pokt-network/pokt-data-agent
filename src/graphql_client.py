@@ -192,6 +192,7 @@ GRAPHQL_REGISTRY = {
         fields_notes={
             "timeToBlock": "Time spent generating the block in milliseconds.",
             "size": "Block size in bytes.",
+            "hash": "Block hash; use filter {hash: {equalTo: ...}} to look up a block by hash.",
         },
     ),
     "authzs": QueryFieldInfo(
@@ -348,5 +349,133 @@ GRAPHQL_REGISTRY = {
     "eventSupplierSlasheds": QueryFieldInfo(
         name="eventSupplierSlasheds",
         description="Tracks events that resulted in stake slashing of a supplier due to offending the protocol (like missing a proof request). Provides slash amoount and resulting stake of the supplier.",
+    ),
+    "transactions": QueryFieldInfo(
+        name="transactions",
+        description="Queries indexed transactions. Filter by signer address, block height or transaction hash (the id field). Use this for the transaction history of an account, the transactions in a block, or looking up a single transaction by hash. Order by BLOCK_ID_DESC to get the most recent first.",
+        fields_notes={
+            "id": "The transaction hash, a 64-character hex string.",
+            "code": "Result code of the transaction: 0 means success, any other value means it failed.",
+            "signerAddress": 'The address (must start with "pokt1") that signed the transaction. Filter by this for an account transaction history.',
+            "fees": "Fees paid by the transaction, in upokt.",
+            "gasUsed": "Gas consumed by the transaction.",
+            "amountOfMessages": "Number of messages contained in the transaction.",
+        },
+    ),
+    "nativeTransfers": QueryFieldInfo(
+        name="nativeTransfers",
+        description='Tracks native token transfers (MsgSend) between accounts. Filter by senderId and/or recipientId to get the transfer history of a wallet (who sent tokens to whom). This complements "modToAcctTransfers", which only tracks reward payouts from network modules.',
+        fields_notes={
+            "senderId": 'The address sending the tokens (must start with "pokt1").',
+            "recipientId": 'The address receiving the tokens (must start with "pokt1").',
+            "amounts": "Transferred amounts.",
+            "denom": 'Token denomination, normally "upokt".',
+        },
+    ),
+    "accounts": QueryFieldInfo(
+        name="accounts",
+        description='Queries account entities with their balances and last-activity data. Richer than "balances": each account links to the block that last updated its balance, which is useful for account-activity (recency) queries.',
+        fields_notes={
+            "id": 'The account address (must start with "pokt1").',
+        },
+    ),
+    "applications": QueryFieldInfo(
+        name="applications",
+        description="Provides visibility on the network applications (entities that request and pay for relays): stake amount and status, staked services, gateway delegations, unstaking begin/end blocks and transfer state. Supports totalCount and stake aggregates, e.g. filter {stakeStatus: {equalTo: Staked}} to count staked apps and sum their stake.",
+        fields_notes={
+            "id": 'The address of the application (must start with "pokt1").',
+            "stakeStatus": "One of: Staked, Unstaking, Unstaked.",
+            "applicationServices": "Services the application is staked for (nested serviceId).",
+            "applicationGateways": "Gateways this application has delegated to (nested gatewayId).",
+            "unstakingEndHeight": "Block at which unstaking completes (when unstaking).",
+        },
+    ),
+    "gateways": QueryFieldInfo(
+        name="gateways",
+        description="Provides visibility on the network gateways: stake amount and status, unstaking begin/end blocks and the applications delegated to them. Supports totalCount and stake aggregates, e.g. filter {stakeStatus: {equalTo: Staked}}.",
+        fields_notes={
+            "id": 'The address of the gateway (must start with "pokt1").',
+            "stakeStatus": "One of: Staked, Unstaking, Unstaked.",
+            "applicationGateways": "Applications delegated to this gateway (nested applicationId).",
+        },
+    ),
+    "validators": QueryFieldInfo(
+        name="validators",
+        description='Provides visibility on the consensus validators: stake amount and status, commission, min self delegation, description (moniker, website) and signer account. Use this for validator identity and stake queries; for the live bonded set prefer the RPC method "get_active_validators".',
+        fields_notes={
+            "id": 'Validator operator address (starts with "poktvaloper").',
+            "signerId": 'Account address operating the validator (starts with "pokt1").',
+            "commission": "Validator commission configuration.",
+        },
+    ),
+    "morseClaimableAccounts": QueryFieldInfo(
+        name="morseClaimableAccounts",
+        description="Tracks the Morse (v0) to Shannon migration accounts: claim status, destination Shannon address and the claimable balance/stake amounts. Use groupedAggregates(groupBy: CLAIMED) to measure migration progress (claimed vs unclaimed). The unclaimed amounts represent un-migrated supply, which is relevant for total supply calculations.",
+        fields_notes={
+            "id": 'The Morse address (hex string, no "0x" prefix).',
+            "claimed": "Whether the account was already claimed on Shannon.",
+            "shannonDestAddress": 'Destination Shannon address (starts with "pokt1") once claimed.',
+            "unstakedBalanceAmount": "Claimable liquid balance in upokt.",
+            "supplierStakeAmount": "Claimable supplier stake in upokt.",
+            "applicationStakeAmount": "Claimable application stake in upokt.",
+        },
+    ),
+    "getLatestBlocksByDay": QueryFieldInfo(
+        name="getLatestBlocksByDay",
+        description='Returns the latest block of each day in the provided date range, with the per-day snapshot fields of the block (staked validators/suppliers/apps/gateways and their tokens, supply, etc.). This is the cheapest way to build daily evolution series of staked actors; prefer it over paging the "blocks" table.',
+    ),
+    "servicesPerformanceBetweenTimes": QueryFieldInfo(
+        name="servicesPerformanceBetweenTimes",
+        description='Compares per-service performance between a current and a previous time window in a single call: relays, computed units, rewards and the relative change. Use it for "which services grew or declined" style questions.',
+        fields_notes={
+            "endCurrent": "End of the current window (timestamp).",
+            "startCurrentAndEndPrevious": "Boundary timestamp: end of the previous window and start of the current one.",
+            "startPrevious": "Start of the previous window (timestamp).",
+        },
+    ),
+    "getSuppliersStakedAndBlocksByPointJson": QueryFieldInfo(
+        name="getSuppliersStakedAndBlocksByPointJson",
+        description='Returns a JSON time-series of suppliers staked per service (amount and tokens) truncated at the requested interval. Time-series counterpart of "getAmountOfBlocksAndSuppliersByTimes" (which only returns totals for the range).',
+    ),
+    "getRewardsByAddressesAndTime": QueryFieldInfo(
+        name="getRewardsByAddressesAndTime",
+        description="Fast method returning the plain total rewards (upokt) received by a group of addresses in a date range, with no grouping. This is the cheapest rewards rollup; use the GroupByService / GroupByAddressAndDate variants only when a breakdown is needed.",
+        fields_notes={
+            "addresses": 'A vector of addresses to query: ["pokt1....", "pokt1...."].',
+        },
+    ),
+    "getProducedBlocksByValidator": QueryFieldInfo(
+        name="getProducedBlocksByValidator",
+        description='Returns the blocks produced by a validator since the given block id. Combine with "getMissingValidatorBlocks" to compute validator uptime.',
+        fields_notes={
+            "fromId": "Starting block id (a number).",
+            "validatorAddress": 'The validator consensus address in hex (NOT the "poktvaloper..." bech32 form).',
+        },
+    ),
+    "getMissingValidatorBlocks": QueryFieldInfo(
+        name="getMissingValidatorBlocks",
+        description='Returns the block ids that the validator missed (did not sign) since the given block id. Combine with "getProducedBlocksByValidator" to compute validator uptime.',
+        fields_notes={
+            "fromId": "Starting block id (a number).",
+            "validatorAddress": 'The validator consensus address in hex (NOT the "poktvaloper..." bech32 form).',
+        },
+    ),
+    "supplierServiceConfigs": QueryFieldInfo(
+        name="supplierServiceConfigs",
+        description="Queries supplier-service configuration pairs: which suppliers are staked in which services, with rev-share, endpoints and activation block. Filter by supplierId to list the services of a supplier, or by serviceId to list the suppliers serving a service.",
+        fields_notes={
+            "supplierId": 'The address of the supplier (must start with "pokt1").',
+            "serviceId": "The service identifier string.",
+            "revShare": "Revenue share configuration of the supplier in this service.",
+            "endpoints": "The endpoints (URLs/domains) the supplier exposes for this service.",
+        },
+    ),
+    "applicationGateways": QueryFieldInfo(
+        name="applicationGateways",
+        description="Queries application-gateway delegation pairs. Filter by applicationId to see which gateways an application delegated to, or by gatewayId to list the applications delegating to a gateway.",
+    ),
+    "applicationServices": QueryFieldInfo(
+        name="applicationServices",
+        description="Queries application-service pairs: which applications are staked for which services. Filter by serviceId to list the applications using a service.",
     ),
 }

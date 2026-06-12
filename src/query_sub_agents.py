@@ -653,6 +653,8 @@ class NetworkUsageAgent(QueryBuilderSubAgent):
         "getRelaysByServicePerPointJson",
         "blocks",
         "getAmountOfBlocksAndSuppliersByTimes",
+        "getLatestBlocksByDay",
+        "getSuppliersStakedAndBlocksByPointJson",
     ]
     rpc_methods = []
 
@@ -666,6 +668,7 @@ Your queries should prefer the most aggregated get... methods available, especia
 Always apply a filter when possible, such as a date range, block range, service identifier, or time window, because the dataset is large.
 
 If the user asks for service traffic concentration, averages, or trends across services, use service-grouped aggregations and time truncation when possible.
+If the user asks for the daily evolution of staked actors (validators, suppliers, apps, gateways) or supply, prefer getLatestBlocksByDay, which returns one block snapshot per day.
 If the user asks about blocks, interpret “block number” as the id of a block, which is numeric.
 If the user provides a service name or identifier, filter by that service when applicable.
 
@@ -693,6 +696,7 @@ class TokenomicsAgent(QueryBuilderSubAgent):
         "getBurnBreakdownBetweenDates",
         "getComputeUnitsToTokensMultiplierEvolution",
         "getDaoBalanceAtHeight",
+        "morseClaimableAccounts",
     ]
     rpc_methods = [
         "get_total_supply",
@@ -709,6 +713,7 @@ Always apply a filter when possible, such as a date range or block height, becau
 
 If the user asks for the DAO balance, use the block height when provided; if height is 0, treat it as the latest block.
 If the user asks about “supply composition,” prefer the method that breaks supply into staked, unstaked, supplier, application, DAO treasury, wrapped POKT, and related categories.
+If the user asks about migration progress or un-migrated supply, use morseClaimableAccounts with groupedAggregates(groupBy: CLAIMED); the unclaimed amounts are supply not yet migrated from Morse to Shannon.
 If the user asks for trends, use grouped-by-date outputs and the coarsest useful interval.
 
 The user might use the following expressions:
@@ -733,13 +738,16 @@ class SettlementRewardsAgent(QueryBuilderSubAgent):
         "modToAcctTransfers",
         "getClaimProofsDataByTime",
         "getClaimProofsDataByDelegatorsAndTime",
+        "getRewardsByAddressesAndTime",
         "getRewardsByAddressesAndTimeGroupByService",
         "getRewardsBySuppliersAndTimeGroupByAddressAndDate",
         "getRewardsBySuppliersAndTimeGroupByService",
     ]
     rpc_methods = [
         "get_claim",
+        "get_all_claims",
         "get_proof",
+        "get_all_proofs",
         "get_session",
     ]
 
@@ -752,6 +760,7 @@ You specialize in claims, proofs, settlements, expirations, account-level payout
 Your queries should strongly prefer the most specific get... methods for grouped reward analysis, and use event-level data when the user needs claim lifecycle details or penalties.
 Always apply a filter when possible, such as a date range, address list, supplier list, or service grouping, because the dataset is large.
 
+If the user asks only for the total rewards of one or more addresses with no breakdown, prefer getRewardsByAddressesAndTime, which is the cheapest rollup.
 If the user asks for exact account earnings or the most granular payout view, prefer modToAcctTransfers.
 If the user asks for claim lifecycle health, use settlement and expiration events together with claim-proof summaries.
 If the user provides an address, it is usually a pokt1... entity. For reward attribution, distinguish carefully between output addresses, supplier/operator addresses, and delegator-related addresses.
@@ -783,11 +792,15 @@ class ServiceEconomicsAgent(QueryBuilderSubAgent):
         "getRewardsByDomainsAndTimeGroupByService",
         "getSupplierStatsByDomains",
         "getRewardsBySuppliersAndTimeGroupByService",
+        "servicesPerformanceBetweenTimes",
+        "getSuppliersStakedAndBlocksByPointJson",
+        "applicationServices",
     ]
     rpc_methods = [
         "get_all_services",
         "get_service",
         "get_relay_mining_difficulty",
+        "get_all_relay_mining_difficulties",
     ]
 
     def __init__(self, llm: ChatOpenAI):
@@ -800,6 +813,7 @@ Your queries should prefer get... methods that summarize service performance or 
 Always apply a filter when possible, such as service ID, domain list, or date range, because service-level analysis is large and time-dependent.
 
 If the user asks which services are most active, most profitable, or have the most supplier support, use grouped and time-truncated service analytics.
+If the user asks to compare service performance between two periods (growth/decline), prefer servicesPerformanceBetweenTimes, which compares a current and a previous window in one call.
 If the user asks about relay-mining difficulty, interpret it as the mechanism that affects the relationship between claimed computed units and estimated computed units.
 If the user provides a service identifier or service name, filter by that service whenever possible.
 If the user asks for does not clarify it, supose that i
@@ -865,6 +879,11 @@ class StakingParticipantStateAgent(QueryBuilderSubAgent):
     name = "StakingParticipantStateAgent"
     graphql_methods = [
         "suppliers",
+        "applications",
+        "gateways",
+        "validators",
+        "supplierServiceConfigs",
+        "applicationGateways",
         "msgStakeApplications",
         "msgStakeGateways",
         "msgStakeSupplierServices",
@@ -883,9 +902,11 @@ class StakingParticipantStateAgent(QueryBuilderSubAgent):
     rpc_methods = [
         "get_active_validators",
         "get_application",
+        "get_all_applications",
         "get_gateway",
         "get_all_gateways",
         "get_supplier",
+        "get_all_suppliers",
     ]
 
     def __init__(self, llm: ChatOpenAI):
@@ -898,6 +919,8 @@ Your queries should prefer the most specific get... GraphQL methods for particip
 Always apply a filter when possible, such as address, address list, time range, block range, or service context, because participant-state data is large and entity-specific.
 
 If the user asks about application health, gateway status, or supplier lifecycle, combine stake history with overservicing and unbonding events.
+If the user asks for counts or total stake of applications, gateways, suppliers or validators, use the entity tables (applications, gateways, suppliers, validators) with a stakeStatus filter and aggregates instead of accumulating events.
+If the user asks which suppliers serve a service (or which services a supplier is staked in), use supplierServiceConfigs filtered by serviceId or supplierId.
 If the user asks about delegators, treat them as addresses providing stake to suppliers and use delegator-oriented summaries.
 If the user asks for node state, disambiguate between supplier, gateway, and application based on context.
 
@@ -909,17 +932,22 @@ class AccountStateAgent(QueryBuilderSubAgent):
     description = (
         "Queries the state and history of general user accounts as plain "
         " accounts and not protocol actors (i.e. not suppliers, "
-        " applications, or gateways). Covers current token balances, Morse "
-        "migration claimable accounts, and historical on-chain balance "
-        "snapshots. Not suitable for queries about staking, rewards, "
-        "governance, or any named protocol actor."
+        " applications, or gateways). Covers current token balances, "
+        "native transfer history (tokens sent/received between wallets), "
+        "Morse migration claimable accounts, and historical on-chain "
+        "balance snapshots. Not suitable for queries about staking, "
+        "rewards, governance, or any named protocol actor."
     )
     graphql_methods = [
         "balances",
+        "accounts",
+        "nativeTransfers",
+        "morseClaimableAccounts",
     ]
     rpc_methods = [
         "get_account_balance",
         "get_morse_claimable_account",
+        "get_all_morse_claimable_accounts",
     ]
 
     def __init__(self, llm: ChatOpenAI):
@@ -930,10 +958,54 @@ class AccountStateAgent(QueryBuilderSubAgent):
 You specialize in querying the token balance and migration state of plain user accounts — addresses that are not staked as suppliers, applications, or gateways.
 
 If the user provides an address, it is a bech32 pokt1… address for Shannon queries, or a hex address for Morse queries.
-If the user asks about "claiming" or "migration" in the context of a specific address, use the RPC method get_morse_claimable_account.
+If the user asks where a wallet sent or received tokens, use nativeTransfers filtered by senderId and/or recipientId.
+If the user asks about "claiming" or "migration" in the context of a specific address, use the RPC method get_morse_claimable_account; for migration status or aggregates over many accounts, use the GraphQL morseClaimableAccounts.
 
 Hint – get_account_balance requires the address as a path parameter substituted directly into the URL path, not as a query parameter.
 Hint – get_morse_claimable_account requires the Morse hex address as a path parameter.
+"""
+
+
+class ChainActivityAgent(QueryBuilderSubAgent):
+    description = (
+        "Explorer-style chain activity lookups: transactions (by hash, "
+        "signer address or block), native token transfers between "
+        "accounts, block data, and validator identity and uptime. Use "
+        "this agent for questions about specific transactions, transfers, "
+        "blocks or validators. Not suitable for staking lifecycle, reward "
+        "attribution, or aggregated network usage analytics."
+    )
+    name = "ChainActivityAgent"
+    graphql_methods = [
+        "transactions",
+        "nativeTransfers",
+        "blocks",
+        "accounts",
+        "validators",
+        "getProducedBlocksByValidator",
+        "getMissingValidatorBlocks",
+    ]
+    rpc_methods = []
+
+    def __init__(self, llm: ChatOpenAI):
+        super().__init__(llm)
+
+    def get_system_prompt(self) -> str:
+        return """You are an expert query builder and executor for Pocket Network chain activity (explorer-style lookups).
+You specialize in transactions, native token transfers, blocks, and validator identity and uptime.
+Always apply a filter when possible, such as a transaction hash, signer address, sender/recipient address, block height or range, or validator address, because these tables are very large.
+
+If the user provides a 64-character hex string, treat it as a transaction hash (the transaction "id") or a block hash.
+If the user asks for the transaction history of an address, filter transactions by signerAddress and order by BLOCK_ID_DESC.
+If the user asks where a wallet sent or received tokens, use nativeTransfers filtered by senderId and/or recipientId.
+If the user asks about validator uptime, combine getProducedBlocksByValidator and getMissingValidatorBlocks from a starting block id; note their validatorAddress argument is the hex consensus address, not the poktvaloper... one.
+
+The user might use the following expressions:
+- "tx"/"transaction hash": the transaction id, a 64-character hex string.
+- "block number"/"height": the id of a block, which is numeric.
+- "transfer": a native send between two accounts (nativeTransfers), not a reward payout.
+
+A transaction "code" of 0 means success; any other value means the transaction failed.
 """
 
 
@@ -945,6 +1017,7 @@ ALL_SUBAGENTS = [
     StakingParticipantStateAgent,
     TokenomicsAgent,
     AccountStateAgent,
+    ChainActivityAgent,
 ]
 
 

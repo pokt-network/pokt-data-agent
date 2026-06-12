@@ -16,6 +16,7 @@ from src.agent import PocketNetworkAgent
 from src.models import QueryFieldInfo
 from src.query_sub_agents import (
     AccountStateAgent,
+    ChainActivityAgent,
     GovernanceAdminAgent,
     NetworkUsageAgent,
     ServiceEconomicsAgent,
@@ -28,6 +29,8 @@ from src.tools_data import (
     EXECUTE_GRAPHQL_NAME,
     EXECUTE_RPC_DESCRIPTION,
     EXECUTE_RPC_NAME,
+    GET_INDEXER_STATUS_DESCRIPTION,
+    GET_INDEXER_STATUS_NAME,
     GET_METHOD_DATA_DESCRIPTION,
     GET_METHOD_DATA_NAME,
     LIST_VALID_METHODS_DESCRIPTION,
@@ -38,6 +41,9 @@ from src.tools_data import (
 )
 from src.tools_data import (
     execute_rpc as _execute_rpc,
+)
+from src.tools_data import (
+    get_indexer_status as _get_indexer_status,
 )
 from src.tools_data import (
     get_method_data as _get_method_data,
@@ -106,6 +112,18 @@ DATA_TOOLS = (
     [mcp_execute_graphql, EXECUTE_GRAPHQL_NAME, EXECUTE_GRAPHQL_DESCRIPTION],
     [mcp_execute_rpc, EXECUTE_RPC_NAME, EXECUTE_RPC_DESCRIPTION],
 )
+
+################################################################################
+# ------------------------------ GENERAL TOOLS ----------------------------------
+################################################################################
+
+
+async def mcp_get_indexer_status() -> Tuple[bool, Any, Optional[str]]:
+    return await anyio.to_thread.run_sync(lambda: _get_indexer_status.func())
+
+
+# General-purpose tools exposed in every server exposure mode (not bound to a space)
+GENERAL_TOOLS = ([mcp_get_indexer_status, GET_INDEXER_STATUS_NAME, GET_INDEXER_STATUS_DESCRIPTION],)
 
 ################################################################################
 # -------------------------- INSTROPECTION TOOLS -------------------------------
@@ -280,6 +298,10 @@ async def query_account_state(query: str) -> dict:
     return await anyio.to_thread.run_sync(lambda: _run_sub_agent(AccountStateAgent, query))
 
 
+async def query_chain_activity(query: str) -> dict:
+    return await anyio.to_thread.run_sync(lambda: _run_sub_agent(ChainActivityAgent, query))
+
+
 AGENTS_AS_TOOLS = (
     [query_pocket_network, MAIN_AGENT_TOOL_NAME, MAIN_AGENT_DESCRIPTION + MCP_TOOL_APPENDIX],
     [
@@ -316,5 +338,10 @@ AGENTS_AS_TOOLS = (
         query_account_state,
         f"{SUB_AGENT_TOOL_PREFIX}{AccountStateAgent.name}",
         AccountStateAgent.description + MCP_TOOL_APPENDIX,
+    ],
+    [
+        query_chain_activity,
+        f"{SUB_AGENT_TOOL_PREFIX}{ChainActivityAgent.name}",
+        ChainActivityAgent.description + MCP_TOOL_APPENDIX,
     ],
 )

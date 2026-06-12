@@ -80,6 +80,9 @@ The intention behind having agents as tools is to help lightweight models to sep
 - `get_type_info` — get fields for a GraphQL type
 - `get_enum_values` — list valid enum values
 
+**General Tools** — exposed in every mode:
+- `get_indexer_status` — live GraphQL indexer status (target vs last indexed height, health flag); use it to check data freshness
+
 **Agent Tools** — natural language queries:
 - `mainagent` — auto-routes to the best sub-agent, soling the query completely (`WIP`).
 - `subagent_NetworkUsage` — network usage and relay data
@@ -89,6 +92,7 @@ The intention behind having agents as tools is to help lightweight models to sep
 - `subagent_GovernanceAdmin` — governance proposals and params
 - `subagent_StakingParticipantState` — staking and validator state
 - `subagent_AccountState` — account balances and state
+- `subagent_ChainActivity` — explorer-style lookups: transactions, transfers, blocks, validators
 
 
 ## MCP Configuration Examples
