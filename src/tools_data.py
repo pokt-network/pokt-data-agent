@@ -1,12 +1,12 @@
 """LangChain data tools for pocket network data (general)."""
 
 import logging
+from dataclasses import asdict
 from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.tools import tool
 
 from src.graphql_client import GRAPHQL_REGISTRY, PocketNetworkAPIClient
-from src.models import QueryFieldInfo
 from src.query_sub_agents import ALL_SUBAGENTS
 from src.rpc_client import RPC_METHODS, PocketNetworkRPCClient
 
@@ -28,7 +28,7 @@ The list is divided by partition, and the returned methdos is a curated list of 
 Please note:
 - GraphQL endpoint have indexed data which is prefered for complex queries.
 - Use RPC when you need only real time (last block) data for simple requests.
-- Once you selected a method, consider calling \"data_get_method_data\" to obtain more information about it.
+- Once you selected a method, consider calling \"data_get_method_data\" to obtain more information about it, and \"data_get_method_examples\" to obtain curated working example queries.
 
 Args:
     partition_name: The name of the data partition.
@@ -69,7 +69,7 @@ def list_valid_methods(partition_name: str, protocol: str) -> List[str]:
     return [registry.get(m).name for m in methods_list]
 
 
-GET_METHOD_DATA_DESCRIPTION = """Return data (description, meanings, examples, etc) for a Pocket Network GraphQL or RPC API method.
+GET_METHOD_DATA_DESCRIPTION = """Return data (description, field meanings, call data, etc) for a Pocket Network GraphQL or RPC API method.
 
 Args:
     method_name: The name of the requested method (case-sensitive).
@@ -79,7 +79,7 @@ GET_METHOD_DATA_NAME = "data_get_method_data"
 
 
 @tool(GET_METHOD_DATA_NAME, description=GET_METHOD_DATA_DESCRIPTION)
-def get_method_data(method_name: str, protocol: str) -> QueryFieldInfo:
+def get_method_data(method_name: str, protocol: str) -> Dict[str, Any]:
     # Check protocol
     protocol = protocol.lower()
     valid_protocols = ["rpc", "graphql"]
@@ -101,8 +101,57 @@ def get_method_data(method_name: str, protocol: str) -> QueryFieldInfo:
             f'Selected method "{method_name}" not found in the list of curated enpoints in the selected protocol "{protocol}". Please note that method names are case-sensitive.'
         )
 
-    # Return all data
-    return methods_data
+    # Return all data except the examples, which are served by "data_get_method_examples"
+    method_dict = asdict(methods_data)
+    method_dict.pop("examples", None)
+    return method_dict
+
+
+GET_METHOD_EXAMPLES_DESCRIPTION = """Return curated, working example queries for a Pocket Network GraphQL or RPC API method.
+
+The examples are taken from production consumers of the API (such as the Pocket Network explorer) and show
+the exact argument names, filters, orderings and aggregations the method supports. Use them as templates
+when building a query or writing code against the API. Each example starts with a "#" comment stating its
+purpose. Placeholders like "pokt1..." must be replaced with real values before executing.
+
+GraphQL examples are query strings ready for "data_execute_graphql". RPC examples are JSON call
+descriptors for "data_execute_rpc", holding the "method_name" and, when needed, "params" (query
+parameters) and "path_params" (URL path substitutions).
+
+An empty list means no examples have been curated for that method yet.
+
+Args:
+    method_name: The name of the requested method (case-sensitive).
+    protocol: the name of the requested protocol GraphQL or RPC.
+"""
+GET_METHOD_EXAMPLES_NAME = "data_get_method_examples"
+
+
+@tool(GET_METHOD_EXAMPLES_NAME, description=GET_METHOD_EXAMPLES_DESCRIPTION)
+def get_method_examples(method_name: str, protocol: str) -> List[str]:
+    # Check protocol
+    protocol = protocol.lower()
+    valid_protocols = ["rpc", "graphql"]
+    if protocol not in valid_protocols:
+        raise RuntimeError(f'Cannot find selected protocol: "{protocol}". Please choose from: {valid_protocols}')
+
+    # Get selected registry
+    if protocol == "graphql":
+        registry = GRAPHQL_REGISTRY
+    elif protocol == "rpc":
+        registry = RPC_METHODS
+    else:
+        raise ValueError("Internal Error [T1]")
+
+    # Get the method data from registry
+    methods_data = registry.get(method_name, None)
+    if methods_data is None:
+        raise RuntimeError(
+            f'Selected method "{method_name}" not found in the list of curated enpoints in the selected protocol "{protocol}". Please note that method names are case-sensitive.'
+        )
+
+    # Return only the curated examples
+    return methods_data.examples
 
 
 ################################################################################

@@ -13,7 +13,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import anyio
 
 from src.agent import PocketNetworkAgent
-from src.models import QueryFieldInfo
 from src.query_sub_agents import (
     AccountStateAgent,
     ChainActivityAgent,
@@ -33,6 +32,8 @@ from src.tools_data import (
     GET_INDEXER_STATUS_NAME,
     GET_METHOD_DATA_DESCRIPTION,
     GET_METHOD_DATA_NAME,
+    GET_METHOD_EXAMPLES_DESCRIPTION,
+    GET_METHOD_EXAMPLES_NAME,
     LIST_VALID_METHODS_DESCRIPTION,
     LIST_VALID_METHODS_NAME,
 )
@@ -47,6 +48,9 @@ from src.tools_data import (
 )
 from src.tools_data import (
     get_method_data as _get_method_data,
+)
+from src.tools_data import (
+    get_method_examples as _get_method_examples,
 )
 from src.tools_data import (
     list_valid_methods as _list_valid_methods,
@@ -88,8 +92,12 @@ async def mcp_list_valid_methods(partition_name: str, protocol: str) -> List[str
     )
 
 
-async def mcp_get_method_data(method_name: str, protocol: str) -> QueryFieldInfo:
+async def mcp_get_method_data(method_name: str, protocol: str) -> Dict[str, Any]:
     return await anyio.to_thread.run_sync(lambda: _get_method_data.func(method_name=method_name, protocol=protocol))
+
+
+async def mcp_get_method_examples(method_name: str, protocol: str) -> List[str]:
+    return await anyio.to_thread.run_sync(lambda: _get_method_examples.func(method_name=method_name, protocol=protocol))
 
 
 async def mcp_execute_graphql(query: str) -> Tuple[bool, Any, str | None]:
@@ -109,6 +117,7 @@ async def mcp_execute_rpc(
 DATA_TOOLS = (
     [mcp_list_valid_methods, LIST_VALID_METHODS_NAME, LIST_VALID_METHODS_DESCRIPTION],
     [mcp_get_method_data, GET_METHOD_DATA_NAME, GET_METHOD_DATA_DESCRIPTION],
+    [mcp_get_method_examples, GET_METHOD_EXAMPLES_NAME, GET_METHOD_EXAMPLES_DESCRIPTION],
     [mcp_execute_graphql, EXECUTE_GRAPHQL_NAME, EXECUTE_GRAPHQL_DESCRIPTION],
     [mcp_execute_rpc, EXECUTE_RPC_NAME, EXECUTE_RPC_DESCRIPTION],
 )

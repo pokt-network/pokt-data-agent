@@ -39,6 +39,10 @@ RPC_METHODS = {
                 "pagination.limit": 1000,
             },
         },
+        examples=[
+            "# List the active (bonded) validators - the defaults already set status and limit\n"
+            '{"method_name": "get_active_validators"}',
+        ],
     ),
     # ------------------------------------------------------------------
     # Cosmos bank
@@ -55,6 +59,10 @@ RPC_METHODS = {
             "path": "/cosmos/bank/v1beta1/balances/{address}",
             "default_params": {},
         },
+        examples=[
+            "# Live balance of an account (the address goes in the URL path)\n"
+            '{"method_name": "get_account_balance", "path_params": {"address": "pokt1..."}}',
+        ],
     ),
     "get_total_supply": QueryFieldInfo(
         name="get_total_supply",
@@ -68,6 +76,9 @@ RPC_METHODS = {
             "path": "/cosmos/bank/v1beta1/supply",
             "default_params": {"pagination.limit": 100},
         },
+        examples=[
+            '# Live total supply for all denominations (look for denom "upokt")\n{"method_name": "get_total_supply"}',
+        ],
     ),
     # ------------------------------------------------------------------
     # Application module
@@ -86,6 +97,11 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/application/application",
             "default_params": {"pagination.limit": 1000},
         },
+        examples=[
+            '# All staked applications\n{"method_name": "get_all_applications"}',
+            "# Applications delegated to a specific gateway\n"
+            '{"method_name": "get_all_applications", "params": {"delegatee_gateway_address": "pokt1..."}}',
+        ],
     ),
     "get_application": QueryFieldInfo(
         name="get_application",
@@ -101,6 +117,10 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/application/application/{address}",
             "default_params": {},
         },
+        examples=[
+            "# Application detail by address (the address goes in the URL path)\n"
+            '{"method_name": "get_application", "path_params": {"address": "pokt1..."}}',
+        ],
     ),
     "get_application_params": QueryFieldInfo(
         name="get_application_params",
@@ -113,6 +133,9 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/application/params",
             "default_params": {},
         },
+        examples=[
+            '# Current application module governance parameters\n{"method_name": "get_application_params"}',
+        ],
     ),
     # ------------------------------------------------------------------
     # Gateway module
@@ -128,6 +151,9 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/gateway/gateway",
             "default_params": {"pagination.limit": 1000},
         },
+        examples=[
+            '# All staked gateways\n{"method_name": "get_all_gateways"}',
+        ],
     ),
     "get_gateway": QueryFieldInfo(
         name="get_gateway",
@@ -141,6 +167,10 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/gateway/gateway/{address}",
             "default_params": {},
         },
+        examples=[
+            "# Gateway detail by address (the address goes in the URL path)\n"
+            '{"method_name": "get_gateway", "path_params": {"address": "pokt1..."}}',
+        ],
     ),
     "get_gateway_params": QueryFieldInfo(
         name="get_gateway_params",
@@ -150,6 +180,9 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/gateway/params",
             "default_params": {},
         },
+        examples=[
+            '# Current gateway module governance parameters\n{"method_name": "get_gateway_params"}',
+        ],
     ),
     # ------------------------------------------------------------------
     # Supplier module
@@ -168,6 +201,12 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/supplier/supplier",
             "default_params": {"pagination.limit": 1000},
         },
+        examples=[
+            "# All staked suppliers without endpoint details (much smaller payload)\n"
+            '{"method_name": "get_all_suppliers", "params": {"dehydrated": "true"}}',
+            "# Suppliers staked in a specific service\n"
+            '{"method_name": "get_all_suppliers", "params": {"service_id": "eth", "dehydrated": "true"}}',
+        ],
     ),
     "get_supplier": QueryFieldInfo(
         name="get_supplier",
@@ -183,6 +222,10 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/supplier/supplier/{operator_address}",
             "default_params": {},
         },
+        examples=[
+            "# Supplier detail by operator address (goes in the URL path)\n"
+            '{"method_name": "get_supplier", "path_params": {"operator_address": "pokt1..."}}',
+        ],
     ),
     "get_supplier_params": QueryFieldInfo(
         name="get_supplier_params",
@@ -194,6 +237,9 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/supplier/params",
             "default_params": {},
         },
+        examples=[
+            '# Current supplier module governance parameters\n{"method_name": "get_supplier_params"}',
+        ],
     ),
     # ------------------------------------------------------------------
     # Service module
@@ -210,6 +256,9 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/service/service",
             "default_params": {"pagination.limit": 1000},
         },
+        examples=[
+            '# All registered services with CUPR and owner\n{"method_name": "get_all_services"}',
+        ],
     ),
     "get_service": QueryFieldInfo(
         name="get_service",
@@ -224,6 +273,10 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/service/service/{id}",
             "default_params": {},
         },
+        examples=[
+            "# Service detail by service id (goes in the URL path)\n"
+            '{"method_name": "get_service", "path_params": {"id": "eth"}}',
+        ],
     ),
     "get_all_relay_mining_difficulties": QueryFieldInfo(
         name="get_all_relay_mining_difficulties",
@@ -239,6 +292,9 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/service/relay_mining_difficulty",
             "default_params": {"pagination.limit": 1000},
         },
+        examples=[
+            '# Current relay-mining difficulty of every service\n{"method_name": "get_all_relay_mining_difficulties"}',
+        ],
     ),
     "get_relay_mining_difficulty": QueryFieldInfo(
         name="get_relay_mining_difficulty",
@@ -252,6 +308,10 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/service/relay_mining_difficulty/{serviceId}",
             "default_params": {},
         },
+        examples=[
+            "# Relay-mining difficulty of one service (service id goes in the URL path)\n"
+            '{"method_name": "get_relay_mining_difficulty", "path_params": {"serviceId": "eth"}}',
+        ],
     ),
     "get_service_params": QueryFieldInfo(
         name="get_service_params",
@@ -261,6 +321,9 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/service/params",
             "default_params": {},
         },
+        examples=[
+            '# Current service module governance parameters\n{"method_name": "get_service_params"}',
+        ],
     ),
     # ------------------------------------------------------------------
     # Session module
@@ -281,6 +344,11 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/session/get_session",
             "default_params": {},
         },
+        examples=[
+            "# Session for an application/service pair at a block height (all three params required)\n"
+            '{"method_name": "get_session"'
+            ', "params": {"application_address": "pokt1...", "service_id": "eth", "block_height": "790000"}}',
+        ],
     ),
     "get_session_params": QueryFieldInfo(
         name="get_session_params",
@@ -292,6 +360,9 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/session/params",
             "default_params": {},
         },
+        examples=[
+            '# Current session module governance parameters\n{"method_name": "get_session_params"}',
+        ],
     ),
     # ------------------------------------------------------------------
     # Proof module
@@ -311,6 +382,10 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/proof/claim",
             "default_params": {"pagination.limit": 1000},
         },
+        examples=[
+            "# Pending claims of a supplier (claims are transient, the list may be empty)\n"
+            '{"method_name": "get_all_claims", "params": {"supplier_operator_address": "pokt1..."}}',
+        ],
     ),
     "get_claim": QueryFieldInfo(
         name="get_claim",
@@ -325,6 +400,11 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/proof/claim/{session_id}/{supplier_operator_address}",
             "default_params": {},
         },
+        examples=[
+            "# Claim of a supplier for a session (both values go in the URL path)\n"
+            '{"method_name": "get_claim"'
+            ', "path_params": {"session_id": "<SESSION_ID_HEX>", "supplier_operator_address": "pokt1..."}}',
+        ],
     ),
     "get_all_proofs": QueryFieldInfo(
         name="get_all_proofs",
@@ -339,6 +419,10 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/proof/proof",
             "default_params": {"pagination.limit": 1000},
         },
+        examples=[
+            "# Submitted proofs of a supplier (proofs are transient, the list may be empty)\n"
+            '{"method_name": "get_all_proofs", "params": {"supplier_operator_address": "pokt1..."}}',
+        ],
     ),
     "get_proof": QueryFieldInfo(
         name="get_proof",
@@ -353,6 +437,11 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/proof/proof/{session_id}/{supplier_operator_address}",
             "default_params": {},
         },
+        examples=[
+            "# Proof of a supplier for a session (both values go in the URL path)\n"
+            '{"method_name": "get_proof"'
+            ', "path_params": {"session_id": "<SESSION_ID_HEX>", "supplier_operator_address": "pokt1..."}}',
+        ],
     ),
     "get_proof_params": QueryFieldInfo(
         name="get_proof_params",
@@ -366,6 +455,9 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/proof/params",
             "default_params": {},
         },
+        examples=[
+            '# Current proof module governance parameters\n{"method_name": "get_proof_params"}',
+        ],
     ),
     # ------------------------------------------------------------------
     # Shared module
@@ -384,6 +476,10 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/shared/params",
             "default_params": {},
         },
+        examples=[
+            "# Shared cross-module parameters (session length, claim/proof windows, CUTTM)\n"
+            '{"method_name": "get_shared_params"}',
+        ],
     ),
     # ------------------------------------------------------------------
     # Tokenomics module
@@ -401,6 +497,10 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/tokenomics/params",
             "default_params": {},
         },
+        examples=[
+            "# Current tokenomics parameters (mint allocation, inflation, mint ratio)\n"
+            '{"method_name": "get_tokenomics_params"}',
+        ],
     ),
     # ------------------------------------------------------------------
     # Migration module
@@ -417,6 +517,9 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/migration/morse_claimable_account",
             "default_params": {"pagination.limit": 1000},
         },
+        examples=[
+            '# All Morse claimable accounts (migration tracking)\n{"method_name": "get_all_morse_claimable_accounts"}',
+        ],
     ),
     "get_morse_claimable_account": QueryFieldInfo(
         name="get_morse_claimable_account",
@@ -431,6 +534,10 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/migration/morse_claimable_account/{address}",
             "default_params": {},
         },
+        examples=[
+            '# Migration status of one Morse account (hex address without "0x", in the URL path)\n'
+            '{"method_name": "get_morse_claimable_account", "path_params": {"address": "<MORSE_HEX_ADDRESS>"}}',
+        ],
     ),
     "get_migration_params": QueryFieldInfo(
         name="get_migration_params",
@@ -442,6 +549,9 @@ RPC_METHODS = {
             "path": "/pokt-network/poktroll/migration/params",
             "default_params": {},
         },
+        examples=[
+            '# Current migration module governance parameters\n{"method_name": "get_migration_params"}',
+        ],
     ),
 }
 

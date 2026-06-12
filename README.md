@@ -71,7 +71,8 @@ The intention behind having agents as tools is to help lightweight models to sep
 
 **Data Tools** — direct endpoint access:
 - `list_valid_methods` — list available GraphQL/RPC methods by usage partition. The methods are a sub-set of methods, curated by us.
-- `get_method_data` — get schema and examples for a given method
+- `get_method_data` — get description and field meanings for a given method
+- `get_method_examples` — get curated, working example queries for a given method
 - `execute_graphql` — run a GraphQL query
 - `execute_rpc` — run an RPC call
 

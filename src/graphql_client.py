@@ -82,10 +82,23 @@ GRAPHQL_REGISTRY = {
     "balances": QueryFieldInfo(
         name="balances",
         description="Queries account balances, not tied to any specific actor (supplier, application, etc.).",
+        examples=[
+            "# Top accounts by upokt balance (rich list), with last-activity block\n"
+            'query { balances(first: 20, orderBy: AMOUNT_DESC, filter: {denom: {equalTo: "upokt"}}) '
+            "{ totalCount nodes { accountId amount denom lastUpdatedBlock { height: id timestamp } } } }",
+            "# Count accounts active (balance updated) since a date\n"
+            'query { balances(filter: {lastUpdatedBlock: {timestamp: {greaterThanOrEqualTo: "2026-06-01T00:00:00Z"}}, '
+            'denom: {equalTo: "upokt"}}) { totalCount } }',
+        ],
     ),
     "getRewardsByDate": QueryFieldInfo(
         name="getRewardsByDate",
         description="Total relays, computed units, and claimed tokens data on a given period for the whole network",
+        examples=[
+            "# Network relays / computed units / claimed tokens bucketed by interval (e.g. day, hour)\n"
+            'query { getRewardsByDate(startDate: "2026-06-01T00:00:00Z", endDate: "2026-06-11T00:00:00Z", '
+            'truncInterval: "day") }',
+        ],
     ),
     "getTotalSupplyBetweenDates": QueryFieldInfo(
         name="getTotalSupplyBetweenDates",
@@ -94,6 +107,10 @@ GRAPHQL_REGISTRY = {
     "getDaoBalanceAtHeight": QueryFieldInfo(
         name="getDaoBalanceAtHeight",
         description="DAO holdings in upokt at the given block hieght",
+        examples=[
+            "# DAO treasury balance in upokt at the latest block (no argument = latest)\n"
+            "query { getDaoBalanceAtHeight }",
+        ],
     ),
     "eventClaimSettleds": QueryFieldInfo(
         name="eventClaimSettleds",
@@ -129,6 +146,13 @@ GRAPHQL_REGISTRY = {
             "computedUnits": "Number of CUs claimed by suppliers",
             "claimedUpokt": "Total upokt requested by suppliers.",
         },
+        examples=[
+            "# Per-service traffic totals in a time window (grouped aggregates)\n"
+            "query { relayByBlockAndServices(filter: {block: {timestamp: "
+            '{greaterThanOrEqualTo: "2026-06-10T00:00:00Z", lessThan: "2026-06-11T00:00:00Z"}}}) '
+            "{ groupedAggregates(groupBy: SERVICE_ID) { keys sum { relays estimatedRelays computedUnits "
+            "estimatedComputedUnits claimedUpokt } } } }",
+        ],
     ),
     "getMintBreakdownBetweenDates": QueryFieldInfo(
         name="getMintBreakdownBetweenDates",
@@ -185,6 +209,15 @@ GRAPHQL_REGISTRY = {
             "id": 'Compound name of the parameter, formed by: "<namespace>-<key>".',
             "blockId": "The block number when the parameter was set/changed.",
         },
+        examples=[
+            "# Latest value of every on-chain module parameter (one row per namespace/key)\n"
+            "query { params(orderBy: [BLOCK_ID_DESC], distinct: [NAMESPACE, KEY], first: 1000) "
+            "{ nodes { namespace key value block { height: id } } } }",
+            "# Latest values of specific params in a namespace\n"
+            'query { params(filter: {namespace: {equalTo: "shared"}, key: {in: ["claim_window_open_offset_blocks", '
+            '"claim_window_close_offset_blocks", "proof_window_close_offset_blocks"]}}, orderBy: [BLOCK_ID_DESC], '
+            "distinct: [NAMESPACE, KEY]) { nodes { key value blockId } } }",
+        ],
     ),
     "blocks": QueryFieldInfo(
         name="blocks",
@@ -194,6 +227,18 @@ GRAPHQL_REGISTRY = {
             "size": "Block size in bytes.",
             "hash": "Block hash; use filter {hash: {equalTo: ...}} to look up a block by hash.",
         },
+        examples=[
+            "# Latest block with network-wide snapshot fields (staked actors, supply, relays)\n"
+            "query { blocks(orderBy: ID_DESC, first: 1) { nodes { height: id hash timestamp totalTxs totalRelays "
+            "totalComputedUnits stakedValidators stakedSuppliers stakedSuppliersTokens stakedApps stakedAppsTokens "
+            "stakedGateways timeToBlock size supplies { nodes { supply { denom amount } } } } } }",
+            "# Network totals and averages over a time window (aggregates over blocks)\n"
+            'query { blocks(filter: {timestamp: {greaterThanOrEqualTo: "2026-06-10T00:00:00Z", '
+            'lessThanOrEqualTo: "2026-06-11T00:00:00Z"}}) { aggregates { sum { totalRelays totalEstimatedRelays '
+            "totalComputedUnits totalEstimatedComputedUnits } average { timeToBlock size } } } }",
+            "# Look up a single block by height (the block id)\n"
+            'query { block(id: "790000") { height: id hash timestamp totalTxs proposerAddress } }',
+        ],
     ),
     "authzs": QueryFieldInfo(
         name="authzs",
@@ -214,6 +259,15 @@ GRAPHQL_REGISTRY = {
             "ownerId": "Address of the account that owns this service (the one that can cahnge the CUPR value and receives owner rewards).",
             "supplierServiceConfigs": "Contains data about the servicers in this service.",
         },
+        examples=[
+            "# Service list with app/supplier counts and latest relay-mining difficulty\n"
+            "query { services(first: 20) { totalCount nodes { id name computeUnitsPerRelay ownerId "
+            "applicationServices { totalCount } supplierServiceConfigs { totalCount } "
+            "relayMiningDifficultyUpdatedEvents(orderBy: BLOCK_ID_DESC, first: 1) { nodes { newNumRelaysEma } } } } }",
+            "# Fuzzy search services by id or name\n"
+            'query { services(filter: {or: [{id: {includesInsensitive: "eth"}}, '
+            '{name: {includesInsensitive: "eth"}}]}) { nodes { id name } } }',
+        ],
     ),
     "suppliers": QueryFieldInfo(
         name="suppliers",
@@ -223,6 +277,14 @@ GRAPHQL_REGISTRY = {
             "ownerId": "The address of the owner of the stake.",
             "serviceConfigs": "Contains information about the staked services in this supplier.",
         },
+        examples=[
+            "# Staked suppliers: count and total stake\n"
+            "query { suppliers(filter: {stakeStatus: {equalTo: Staked}}) { totalCount "
+            "aggregates { sum { stakeAmount } } } }",
+            "# Paginated supplier list with owner/operator and staked services\n"
+            "query { suppliers(first: 20, offset: 0, orderBy: [STAKE_STATUS_ASC]) { totalCount nodes { id ownerId "
+            "operatorId stakeAmount stakeStatus serviceConfigs(first: 5) { totalCount nodes { serviceId } } } } }",
+        ],
     ),
     "getComputeUnitsToTokensMultiplierEvolution": QueryFieldInfo(
         name="getComputeUnitsToTokensMultiplierEvolution",
@@ -231,6 +293,11 @@ GRAPHQL_REGISTRY = {
     "getRelaysByServicePerPointJson": QueryFieldInfo(
         name="getRelaysByServicePerPointJson",
         description="Returns a JSON string containing the total traffic per service of the network in the provided dates and truncated as requested. Usefull for network-wide traffic analisys.",
+        examples=[
+            "# Per-service traffic time-series (JSON string result)\n"
+            'query { getRelaysByServicePerPointJson(startTimestamp: "2026-06-01T00:00:00Z", '
+            'endTimestamp: "2026-06-11T00:00:00Z", truncInterval: "day") }',
+        ],
     ),
     "getAmountOfBlocksAndSuppliersByTimes": QueryFieldInfo(
         name="getAmountOfBlocksAndSuppliersByTimes",
@@ -241,6 +308,11 @@ GRAPHQL_REGISTRY = {
             "computeUnitsPerRelay": "Numeber of Compute Units to be consumed per call to this service (known normaly by CUPR)",
             "service_id": "ID of the service.",
         },
+        examples=[
+            "# Sum of blocks and suppliers-staked per service in a date range (divide to get the average)\n"
+            'query { getAmountOfBlocksAndSuppliersByTimes(startDate: "2026-06-01T00:00:00Z", '
+            'endDate: "2026-06-11T00:00:00Z") }',
+        ],
     ),
     "getSupplyCompositionBetweenDates": QueryFieldInfo(
         name="getSupplyCompositionBetweenDates",
@@ -252,10 +324,19 @@ GRAPHQL_REGISTRY = {
     "getTotalSupplyByDay": QueryFieldInfo(
         name="getTotalSupplyByDay",
         description="Returns supply by day for quick analysis, contains shannon_supply, unstaked_balance_amount, supplier_stake_amount, application_stake_amount and total_supply.",
+        examples=[
+            "# Daily supply series for a date range\n"
+            'query { getTotalSupplyByDay(startDate: "2026-06-01T00:00:00Z", endDate: "2026-06-11T00:00:00Z") }',
+        ],
     ),
     "getClaimProofsDataByTime": QueryFieldInfo(
         name="getClaimProofsDataByTime",
         description="Provides data on the claim-proof data between the provided dates and the given granualirity. Usefull for global analysis of total claims/proofs/expirations denominated in computed units, relays and upokt",
+        examples=[
+            "# Network-wide claims vs proofs time-series\n"
+            'query { getClaimProofsDataByTime(startTs: "2026-06-01T00:00:00Z", endTs: "2026-06-11T00:00:00Z", '
+            'truncInterval: "day") }',
+        ],
     ),
     "getClaimProofsDataByDelegatorsAndTime": QueryFieldInfo(
         name="getClaimProofsDataByDelegatorsAndTime",
@@ -263,6 +344,11 @@ GRAPHQL_REGISTRY = {
         fields_notes={
             "addresses": 'A vector of addresses to query: ["pokt1....", "pokt1...."].',
         },
+        examples=[
+            "# Claims vs proofs time-series for specific addresses\n"
+            'query { getClaimProofsDataByDelegatorsAndTime(addresses: ["pokt1..."], '
+            'startTs: "2026-06-01T00:00:00Z", endTs: "2026-06-11T00:00:00Z", truncInterval: "day") }',
+        ],
     ),
     "getRewardsByAddressesAndTimeGroupByService": QueryFieldInfo(
         name="getRewardsByAddressesAndTimeGroupByService",
@@ -270,6 +356,11 @@ GRAPHQL_REGISTRY = {
         fields_notes={
             "addresses": 'A vector of addresses to query: ["pokt1....", "pokt1...."].',
         },
+        examples=[
+            "# Rewards of a group of addresses broken down by service\n"
+            'query { getRewardsByAddressesAndTimeGroupByService(addresses: ["pokt1..."], '
+            'startTs: "2026-06-01T00:00:00Z", endTs: "2026-06-11T00:00:00Z") }',
+        ],
     ),
     "getRewardsBySuppliersAndTimeGroupByAddressAndDate": QueryFieldInfo(
         name="getRewardsBySuppliersAndTimeGroupByAddressAndDate",
@@ -303,14 +394,29 @@ GRAPHQL_REGISTRY = {
     "getDataByDelegatorAddressesAndTimes": QueryFieldInfo(
         name="getDataByDelegatorAddressesAndTimes",
         description="Returns the total rewards, relays (claims and proofs) and slashes done by a delegator (an address providing stake to a supplier). Usefull to see data and status of an address that is delegating to a node, common in the permisionless staking mechanism of pokt. Observed period in timestamps",
+        examples=[
+            "# Operator rollup (rewards, claims/proofs, slashes) for addresses in a time window\n"
+            'query { getDataByDelegatorAddressesAndTimes(addresses: ["pokt1..."], '
+            'startTs: "2026-06-01T00:00:00Z", endTs: "2026-06-11T00:00:00Z") }',
+        ],
     ),
     "getDataByDelegatorAddressesAndBlocks": QueryFieldInfo(
         name="getDataByDelegatorAddressesAndBlocks",
         description="Returns the total rewards, relays (claims and proofs) and slashes done by a delegator (an address providing stake to a supplier). Usefull to see data and status of an address that is delegating to a node, common in the permisionless staking mechanism of pokt. Observed period in block numbers.",
+        examples=[
+            "# Operator rollup (rewards, claims/proofs, slashes) for addresses in a block range\n"
+            'query { getDataByDelegatorAddressesAndBlocks(addresses: ["pokt1..."], '
+            'startHeight: "780000", endHeight: "790000") }',
+        ],
     ),
     "getOverservicedByAddressesAndTime": QueryFieldInfo(
         name="getOverservicedByAddressesAndTime",
         description="Returns the total overservicing done by an application or a supplier. Overservice occus when the appplication pays less to the supplier than expected. This is usefull for tracking suppliers that are being too optimistic or by app that are close to be zeroed in stake. A high overservicing is bad for the network.",
+        examples=[
+            "# Overservicing time-series for a group of addresses\n"
+            'query { getOverservicedByAddressesAndTime(addresses: ["pokt1..."], '
+            'startTs: "2026-06-01T00:00:00Z", endTs: "2026-06-11T00:00:00Z", truncInterval: "day") }',
+        ],
     ),
     "eventApplicationOverserviceds": QueryFieldInfo(
         name="eventApplicationOverserviceds",
@@ -349,6 +455,13 @@ GRAPHQL_REGISTRY = {
     "eventSupplierSlasheds": QueryFieldInfo(
         name="eventSupplierSlasheds",
         description="Tracks events that resulted in stake slashing of a supplier due to offending the protocol (like missing a proof request). Provides slash amoount and resulting stake of the supplier.",
+        examples=[
+            "# Recent slashing events of a supplier, with penalty and before/after stake\n"
+            "query { eventSupplierSlasheds(orderBy: [BLOCK_ID_DESC, SUPPLIER_ID_DESC], "
+            'filter: {supplierId: {equalTo: "pokt1..."}}, first: 20) { totalCount nodes { supplierId blockId '
+            "proofValidationStatus proofMissingPenalty previousStakeAmount afterStakeAmount sessionId serviceId "
+            "applicationId } } }",
+        ],
     ),
     "transactions": QueryFieldInfo(
         name="transactions",
@@ -361,6 +474,20 @@ GRAPHQL_REGISTRY = {
             "gasUsed": "Gas consumed by the transaction.",
             "amountOfMessages": "Number of messages contained in the transaction.",
         },
+        examples=[
+            "# Transaction history of an address (most recent first)\n"
+            'query { transactions(first: 20, offset: 0, filter: {signerAddress: {equalTo: "pokt1..."}}, '
+            "orderBy: BLOCK_ID_DESC) { totalCount nodes { id code block { height: id timestamp } gasUsed gasWanted "
+            "signerAddress fees amountOfMessages } } }",
+            "# Look up a transaction by hash\n"
+            'query { transactions(filter: {id: {equalTo: "<TX_HASH_64_CHAR_HEX>"}}, first: 1) '
+            "{ nodes { id code codespace block { height: id timestamp } signerAddress fees memo } } }",
+            "# Successful vs failed transaction counts in a time window\n"
+            "query { valid: transactions(filter: {code: {equalTo: 0}, block: {timestamp: "
+            '{greaterThanOrEqualTo: "2026-06-10T00:00:00Z"}}}) { totalCount } '
+            "failed: transactions(filter: {code: {notEqualTo: 0}, block: {timestamp: "
+            '{greaterThanOrEqualTo: "2026-06-10T00:00:00Z"}}}) { totalCount } }',
+        ],
     ),
     "nativeTransfers": QueryFieldInfo(
         name="nativeTransfers",
@@ -371,6 +498,13 @@ GRAPHQL_REGISTRY = {
             "amounts": "Transferred amounts.",
             "denom": 'Token denomination, normally "upokt".',
         },
+        examples=[
+            "# Transfers where an address is sender or recipient, with the enclosing transaction\n"
+            "query { nativeTransfers(first: 20, orderBy: BLOCK_ID_DESC, filter: {or: ["
+            '{senderId: {equalTo: "pokt1..."}}, {recipientId: {equalTo: "pokt1..."}}]}) '
+            "{ totalCount nodes { id senderId recipientId amounts denom block { height: id timestamp } "
+            "transaction { id fees code } } } }",
+        ],
     ),
     "accounts": QueryFieldInfo(
         name="accounts",
@@ -378,6 +512,11 @@ GRAPHQL_REGISTRY = {
         fields_notes={
             "id": 'The account address (must start with "pokt1").',
         },
+        examples=[
+            "# Single account with balances and last activity (singular point lookup)\n"
+            'query { account(id: "pokt1...") { id balances { nodes { amount denom '
+            "lastUpdatedBlock { height: id timestamp } } } } }",
+        ],
     ),
     "applications": QueryFieldInfo(
         name="applications",
@@ -389,6 +528,14 @@ GRAPHQL_REGISTRY = {
             "applicationGateways": "Gateways this application has delegated to (nested gatewayId).",
             "unstakingEndHeight": "Block at which unstaking completes (when unstaking).",
         },
+        examples=[
+            "# Staked applications: count and total stake\n"
+            "query { applications(filter: {stakeStatus: {equalTo: Staked}}) { totalCount "
+            "aggregates { sum { stakeAmount } } } }",
+            "# Application detail by address (singular point lookup)\n"
+            'query { application(id: "pokt1...") { id stakeAmount stakeStatus unstakingEndHeight '
+            "applicationServices { nodes { serviceId } } applicationGateways { totalCount nodes { gatewayId } } } }",
+        ],
     ),
     "gateways": QueryFieldInfo(
         name="gateways",
@@ -398,6 +545,12 @@ GRAPHQL_REGISTRY = {
             "stakeStatus": "One of: Staked, Unstaking, Unstaked.",
             "applicationGateways": "Applications delegated to this gateway (nested applicationId).",
         },
+        examples=[
+            "# Staked gateways with stake aggregate and delegated-app counts\n"
+            "query { gateways(first: 20, filter: {stakeStatus: {equalTo: Staked}}) { totalCount "
+            "aggregates { sum { stakeAmount } } nodes { id stakeAmount "
+            "applicationGateways(first: 1) { totalCount } } } }",
+        ],
     ),
     "validators": QueryFieldInfo(
         name="validators",
@@ -407,6 +560,11 @@ GRAPHQL_REGISTRY = {
             "signerId": 'Account address operating the validator (starts with "pokt1").',
             "commission": "Validator commission configuration.",
         },
+        examples=[
+            "# Validator list with stake, commission and identity\n"
+            "query { validators(first: 20) { totalCount nodes { id signerId description commission "
+            "minSelfDelegation stakeAmount stakeStatus } } }",
+        ],
     ),
     "morseClaimableAccounts": QueryFieldInfo(
         name="morseClaimableAccounts",
@@ -419,10 +577,23 @@ GRAPHQL_REGISTRY = {
             "supplierStakeAmount": "Claimable supplier stake in upokt.",
             "applicationStakeAmount": "Claimable application stake in upokt.",
         },
+        examples=[
+            "# Migration progress: claimed vs unclaimed totals\n"
+            "query { morseClaimableAccounts { groupedAggregates(groupBy: CLAIMED) { keys "
+            "sum { unstakedBalanceAmount supplierStakeAmount applicationStakeAmount } } } }",
+            "# Paginated claimable-accounts list with claim status and destination\n"
+            "query { morseClaimableAccounts(first: 20, orderBy: [CLAIMED_DESC, CLAIMED_AT_ID_DESC]) { totalCount "
+            "nodes { id shannonDestAddress claimed claimedAtHeight: claimedAtId transactionId "
+            "unstakedBalanceAmount supplierStakeAmount applicationStakeAmount } } }",
+        ],
     ),
     "getLatestBlocksByDay": QueryFieldInfo(
         name="getLatestBlocksByDay",
         description='Returns the latest block of each day in the provided date range, with the per-day snapshot fields of the block (staked validators/suppliers/apps/gateways and their tokens, supply, etc.). This is the cheapest way to build daily evolution series of staked actors; prefer it over paging the "blocks" table.',
+        examples=[
+            "# One block snapshot per day (daily evolution of staked actors and supply)\n"
+            'query { getLatestBlocksByDay(startDate: "2026-06-01T00:00:00Z", endDate: "2026-06-11T00:00:00Z") }',
+        ],
     ),
     "servicesPerformanceBetweenTimes": QueryFieldInfo(
         name="servicesPerformanceBetweenTimes",
@@ -432,10 +603,20 @@ GRAPHQL_REGISTRY = {
             "startCurrentAndEndPrevious": "Boundary timestamp: end of the previous window and start of the current one.",
             "startPrevious": "Start of the previous window (timestamp).",
         },
+        examples=[
+            "# Per-service comparison: last 24h vs the previous 24h\n"
+            'query { servicesPerformanceBetweenTimes(endCurrent: "2026-06-11T00:00:00Z", '
+            'startCurrentAndEndPrevious: "2026-06-10T00:00:00Z", startPrevious: "2026-06-09T00:00:00Z") }',
+        ],
     ),
     "getSuppliersStakedAndBlocksByPointJson": QueryFieldInfo(
         name="getSuppliersStakedAndBlocksByPointJson",
         description='Returns a JSON time-series of suppliers staked per service (amount and tokens) truncated at the requested interval. Time-series counterpart of "getAmountOfBlocksAndSuppliersByTimes" (which only returns totals for the range).',
+        examples=[
+            "# Suppliers staked per service over time (JSON string result)\n"
+            'query { getSuppliersStakedAndBlocksByPointJson(startTimestamp: "2026-06-01T00:00:00Z", '
+            'endTimestamp: "2026-06-11T00:00:00Z", truncInterval: "day") }',
+        ],
     ),
     "getRewardsByAddressesAndTime": QueryFieldInfo(
         name="getRewardsByAddressesAndTime",
@@ -443,6 +624,11 @@ GRAPHQL_REGISTRY = {
         fields_notes={
             "addresses": 'A vector of addresses to query: ["pokt1....", "pokt1...."].',
         },
+        examples=[
+            "# Total rewards of a group of addresses in a date range (single number)\n"
+            'query { getRewardsByAddressesAndTime(addresses: ["pokt1..."], '
+            'startDate: "2026-06-10T00:00:00Z", endDate: "2026-06-11T00:00:00Z") }',
+        ],
     ),
     "getProducedBlocksByValidator": QueryFieldInfo(
         name="getProducedBlocksByValidator",
@@ -451,6 +637,13 @@ GRAPHQL_REGISTRY = {
             "fromId": "Starting block id (a number).",
             "validatorAddress": 'The validator consensus address in hex (NOT the "poktvaloper..." bech32 form).',
         },
+        examples=[
+            "# Validator uptime: produced vs missed blocks since a height\n"
+            'query { producedBlocks: getProducedBlocksByValidator(fromId: "790000", '
+            'validatorAddress: "<VALIDATOR_HEX_ADDRESS>") '
+            'missedBlocks: getMissingValidatorBlocks(fromId: "790000", '
+            'validatorAddress: "<VALIDATOR_HEX_ADDRESS>") }',
+        ],
     ),
     "getMissingValidatorBlocks": QueryFieldInfo(
         name="getMissingValidatorBlocks",
@@ -459,6 +652,10 @@ GRAPHQL_REGISTRY = {
             "fromId": "Starting block id (a number).",
             "validatorAddress": 'The validator consensus address in hex (NOT the "poktvaloper..." bech32 form).',
         },
+        examples=[
+            "# Block ids a validator missed since a height\n"
+            'query { getMissingValidatorBlocks(fromId: "790000", validatorAddress: "<VALIDATOR_HEX_ADDRESS>") }',
+        ],
     ),
     "supplierServiceConfigs": QueryFieldInfo(
         name="supplierServiceConfigs",
@@ -469,13 +666,28 @@ GRAPHQL_REGISTRY = {
             "revShare": "Revenue share configuration of the supplier in this service.",
             "endpoints": "The endpoints (URLs/domains) the supplier exposes for this service.",
         },
+        examples=[
+            "# All service configs of a supplier (cursor-paginated), with rev-share and endpoints\n"
+            'query { supplierServiceConfigs(filter: {supplierId: {equalTo: "pokt1..."}}) '
+            "{ pageInfo { hasNextPage endCursor } nodes { serviceId revShare endpoints activatedAtId } } }",
+        ],
     ),
     "applicationGateways": QueryFieldInfo(
         name="applicationGateways",
         description="Queries application-gateway delegation pairs. Filter by applicationId to see which gateways an application delegated to, or by gatewayId to list the applications delegating to a gateway.",
+        examples=[
+            "# Gateways an application has delegated to\n"
+            'query { applicationGateways(filter: {applicationId: {equalTo: "pokt1..."}}) '
+            "{ nodes { gateway { id stakeAmount stakeDenom } } } }",
+        ],
     ),
     "applicationServices": QueryFieldInfo(
         name="applicationServices",
         description="Queries application-service pairs: which applications are staked for which services. Filter by serviceId to list the applications using a service.",
+        examples=[
+            "# Applications staked for a given service\n"
+            'query { applicationServices(filter: {serviceId: {equalTo: "eth"}}, first: 20) '
+            "{ totalCount nodes { applicationId } } }",
+        ],
     ),
 }

@@ -1,7 +1,7 @@
 """Data models for the Pocket Network agent."""
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -12,6 +12,9 @@ class QueryFieldInfo:
     description: str
     fields_notes: Dict[str, str] = field(default_factory=dict)
     method_data: Optional[dict] = None
+    # Curated, working example queries (served by the dedicated examples tool,
+    # intentionally NOT included in sub-agent prompts nor get_method_data output).
+    examples: List[str] = field(default_factory=list)
 
 
 @dataclass
