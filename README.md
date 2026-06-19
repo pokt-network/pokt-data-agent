@@ -71,7 +71,8 @@ The intention behind having agents as tools is to help lightweight models to sep
 
 **Data Tools** — direct endpoint access:
 - `list_valid_methods` — list available GraphQL/RPC methods by usage partition. The methods are a sub-set of methods, curated by us.
-- `get_method_data` — get schema and examples for a given method
+- `get_method_data` — get description and field meanings for a given method
+- `get_method_examples` — get curated, working example queries for a given method
 - `execute_graphql` — run a GraphQL query
 - `execute_rpc` — run an RPC call
 
@@ -79,6 +80,9 @@ The intention behind having agents as tools is to help lightweight models to sep
 - `get_field_schema` — get field arguments and return type
 - `get_type_info` — get fields for a GraphQL type
 - `get_enum_values` — list valid enum values
+
+**General Tools** — exposed in every mode:
+- `get_indexer_status` — live GraphQL indexer status (target vs last indexed height, health flag); use it to check data freshness
 
 **Agent Tools** — natural language queries:
 - `mainagent` — auto-routes to the best sub-agent, soling the query completely (`WIP`).
@@ -89,6 +93,7 @@ The intention behind having agents as tools is to help lightweight models to sep
 - `subagent_GovernanceAdmin` — governance proposals and params
 - `subagent_StakingParticipantState` — staking and validator state
 - `subagent_AccountState` — account balances and state
+- `subagent_ChainActivity` — explorer-style lookups: transactions, transfers, blocks, validators
 
 
 ## MCP Configuration Examples
@@ -136,73 +141,23 @@ Here we list example configurations for different products/agents.
 
 ### Claude Code
 
-**Local** — add to `~/.claude.json` or `.mcp.json`:
+**Local / dev** — execute:
 
-```json
-{
-  "mcpServers": {
-    "pokt-data-agent": {
-      "command": "uv",
-      "args": ["run", "mcp_server.py"],
-      "cwd": "/path/to/pokt-data-agent",
-      "timeout": 360000,
-      "env": {
-        "POCKET_NETWORK_RPC_ENDPOINT": "https://sauron-api.infra.pocket.network",
-        "POCKET_NETWORK_DATA_ENDPOINT": "https://data.pocket.network/",
-        "POCKET_NETWORK_MCP_EXPOSURE": "endpoints-tools"
-      }
-    }
-  }
-}
+```sh
+claude mcp add pokt-data-agent \
+  -e POCKET_NETWORK_RPC_ENDPOINT=https://sauron-api.infra.pocket.network \
+  -e POCKET_NETWORK_DATA_ENDPOINT=https://data.pocket.network/ \
+  -e POCKET_NETWORK_MCP_EXPOSURE=endpoints-tools \
+  --scope local \
+  -- uv run --project /path/to/pokt-data-agent/ /path/to/pokt-data-agent/src/mcp_server.py
 ```
-
-**Remote**:
-
-```json
-{
-  "mcpServers": {
-    "pokt-data-agent": {
-      "type": "http",
-      "url": "https://your-server.example.com/mcp",
-      "timeout": 360000,
-      "headers": {
-        "Authorization": "Bearer YOUR_API_KEY"
-      }
-    }
-  }
-}
+**Local / github** — execute:
+```sh
+claude mcp add pokt-data-agent \ 
+  -e POCKET_NETWORK_RPC_ENDPOINT=https://sauron-api.infra.pocket.network \
+  -e POCKET_NETWORK_DATA_ENDPOINT=https://data.pocket.network/ \
+  -- uvx --from git+https://github.com/pokt-network/pokt-data-agent.git pokt-data-agent-mcp
 ```
-
-### HermesAgent
-
-Add to `~/.hermes/config.yaml` under `mcp_servers`:
-
-```yaml
-mcp_servers:
-  pokt-data-agent:
-    command: "uv"
-    args: ["run", "mcp_server.py"]
-    cwd: "/path/to/pokt-data-agent"
-    timeout: 360
-    env:
-      POCKET_NETWORK_RPC_ENDPOINT": "https://sauron-api.infra.pocket.network"
-      POCKET_NETWORK_DATA_ENDPOINT": "https://data.pocket.network/"
-      POCKET_NETWORK_MCP_EXPOSURE": "endpoints-tools"
-```
-
-For remote deployment:
-
-```yaml
-mcp_servers:
-  pokt-data-agent:
-    url: "https://your-server.example.com/mcp"
-    headers:
-      Authorization: "Bearer YOUR_API_KEY"
-    timeout: 360
-```
-
-**Note:** HermesAgent `timeout` is in **seconds** (default: 120). OpenCode and Claude Code use **milliseconds**.
-
 
 # Contributing 
 

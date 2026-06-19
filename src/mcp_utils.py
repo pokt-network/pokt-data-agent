@@ -2,7 +2,7 @@ import os
 
 from mcp.server.fastmcp import FastMCP
 
-from src.mcp_tools import AGENTS_AS_TOOLS, DATA_TOOLS, INSTROPECTION_TOOLS, MCP_SERVER_DESCRIPTION
+from src.mcp_tools import AGENTS_AS_TOOLS, DATA_TOOLS, GENERAL_TOOLS, INSTROPECTION_TOOLS, MCP_SERVER_DESCRIPTION
 
 
 def create_mcp_server(
@@ -31,6 +31,9 @@ def create_mcp_server(
             server_tools = DATA_TOOLS + INSTROPECTION_TOOLS + AGENTS_AS_TOOLS
         case _:
             raise ValueError(f'Unkown selected server exposure: "{server_exposure}"')
+
+    # General tools (server/indexer status) are exposed in every mode
+    server_tools = tuple(server_tools) + GENERAL_TOOLS
 
     set_mcp_tools(server_tools, mcp)
 
