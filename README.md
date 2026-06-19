@@ -141,73 +141,23 @@ Here we list example configurations for different products/agents.
 
 ### Claude Code
 
-**Local** — add to `~/.claude.json` or `.mcp.json`:
+**Local / dev** — execute:
 
-```json
-{
-  "mcpServers": {
-    "pokt-data-agent": {
-      "command": "uv",
-      "args": ["run", "mcp_server.py"],
-      "cwd": "/path/to/pokt-data-agent",
-      "timeout": 360000,
-      "env": {
-        "POCKET_NETWORK_RPC_ENDPOINT": "https://sauron-api.infra.pocket.network",
-        "POCKET_NETWORK_DATA_ENDPOINT": "https://data.pocket.network/",
-        "POCKET_NETWORK_MCP_EXPOSURE": "endpoints-tools"
-      }
-    }
-  }
-}
+```sh
+claude mcp add pokt-data-agent \
+  -e POCKET_NETWORK_RPC_ENDPOINT=https://sauron-api.infra.pocket.network \
+  -e POCKET_NETWORK_DATA_ENDPOINT=https://data.pocket.network/ \
+  -e POCKET_NETWORK_MCP_EXPOSURE=endpoints-tools \
+  --scope local \
+  -- uv run --project /path/to/pokt-data-agent/ /path/to/pokt-data-agent/src/mcp_server.py
 ```
-
-**Remote**:
-
-```json
-{
-  "mcpServers": {
-    "pokt-data-agent": {
-      "type": "http",
-      "url": "https://your-server.example.com/mcp",
-      "timeout": 360000,
-      "headers": {
-        "Authorization": "Bearer YOUR_API_KEY"
-      }
-    }
-  }
-}
+**Local / github** — execute:
+```sh
+claude mcp add pokt-data-agent \ 
+  -e POCKET_NETWORK_RPC_ENDPOINT=https://sauron-api.infra.pocket.network \
+  -e POCKET_NETWORK_DATA_ENDPOINT=https://data.pocket.network/ \
+  -- uvx --from git+https://github.com/pokt-network/pokt-data-agent.git pokt-data-agent-mcp
 ```
-
-### HermesAgent
-
-Add to `~/.hermes/config.yaml` under `mcp_servers`:
-
-```yaml
-mcp_servers:
-  pokt-data-agent:
-    command: "uv"
-    args: ["run", "mcp_server.py"]
-    cwd: "/path/to/pokt-data-agent"
-    timeout: 360
-    env:
-      POCKET_NETWORK_RPC_ENDPOINT": "https://sauron-api.infra.pocket.network"
-      POCKET_NETWORK_DATA_ENDPOINT": "https://data.pocket.network/"
-      POCKET_NETWORK_MCP_EXPOSURE": "endpoints-tools"
-```
-
-For remote deployment:
-
-```yaml
-mcp_servers:
-  pokt-data-agent:
-    url: "https://your-server.example.com/mcp"
-    headers:
-      Authorization: "Bearer YOUR_API_KEY"
-    timeout: 360
-```
-
-**Note:** HermesAgent `timeout` is in **seconds** (default: 120). OpenCode and Claude Code use **milliseconds**.
-
 
 # Contributing 
 
