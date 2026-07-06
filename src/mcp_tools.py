@@ -28,6 +28,8 @@ from src.tools_data import (
     EXECUTE_GRAPHQL_NAME,
     EXECUTE_RPC_DESCRIPTION,
     EXECUTE_RPC_NAME,
+    GET_ENDPOINTS_DESCRIPTION,
+    GET_ENDPOINTS_NAME,
     GET_INDEXER_STATUS_DESCRIPTION,
     GET_INDEXER_STATUS_NAME,
     GET_METHOD_DATA_DESCRIPTION,
@@ -42,6 +44,9 @@ from src.tools_data import (
 )
 from src.tools_data import (
     execute_rpc as _execute_rpc,
+)
+from src.tools_data import (
+    get_endpoints as _get_endpoints,
 )
 from src.tools_data import (
     get_indexer_status as _get_indexer_status,
@@ -131,8 +136,15 @@ async def mcp_get_indexer_status() -> Tuple[bool, Any, Optional[str]]:
     return await anyio.to_thread.run_sync(lambda: _get_indexer_status.func())
 
 
+async def mcp_get_endpoints() -> Dict[str, str]:
+    return await anyio.to_thread.run_sync(lambda: _get_endpoints.func())
+
+
 # General-purpose tools exposed in every server exposure mode (not bound to a space)
-GENERAL_TOOLS = ([mcp_get_indexer_status, GET_INDEXER_STATUS_NAME, GET_INDEXER_STATUS_DESCRIPTION],)
+GENERAL_TOOLS = (
+    [mcp_get_indexer_status, GET_INDEXER_STATUS_NAME, GET_INDEXER_STATUS_DESCRIPTION],
+    [mcp_get_endpoints, GET_ENDPOINTS_NAME, GET_ENDPOINTS_DESCRIPTION],
+)
 
 ################################################################################
 # -------------------------- INSTROPECTION TOOLS -------------------------------

@@ -153,7 +153,7 @@ claude mcp add pokt-data-agent \
 ```
 **Local / github** — execute:
 ```sh
-claude mcp add pokt-data-agent \ 
+claude mcp add pokt-data-agent \
   -e POCKET_NETWORK_RPC_ENDPOINT=https://sauron-api.infra.pocket.network \
   -e POCKET_NETWORK_DATA_ENDPOINT=https://data.pocket.network/ \
   -- uvx --from git+https://github.com/pokt-network/pokt-data-agent.git pokt-data-agent-mcp

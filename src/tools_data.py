@@ -6,9 +6,17 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.tools import tool
 
-from src.graphql_client import GRAPHQL_REGISTRY, PocketNetworkAPIClient
+from src.graphql_client import (
+    GRAPHQL_REGISTRY,
+    POCKET_NETWORK_DATA_ENDPOINT,
+    PocketNetworkAPIClient,
+)
 from src.query_sub_agents import ALL_SUBAGENTS
-from src.rpc_client import RPC_METHODS, PocketNetworkRPCClient
+from src.rpc_client import (
+    POCKET_NETWORK_RPC_ENDPOINT,
+    RPC_METHODS,
+    PocketNetworkRPCClient,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -233,3 +241,25 @@ _INDEXER_STATUS_QUERY = (
 def get_indexer_status() -> Tuple[bool, Any, str | None]:
     # Execute (this is just a wrapper)
     return PocketNetworkAPIClient().execute_query(_INDEXER_STATUS_QUERY)
+
+
+GET_ENDPOINTS_DESCRIPTION = """Return the endpoint URLs this server is currently querying.
+
+Use this to know exactly which Pocket Network backends the data/RPC tools hit, e.g. to confirm
+whether the server is pointed at mainnet, testnet or a custom indexer/node before trusting results.
+
+Returns:
+    A dict mapping protocol to its configured endpoint URL:
+        - graphql: the Pocket Network GraphQL (indexer) endpoint used by "data_execute_graphql".
+        - rpc: the Pocket Network RPC (Cosmos SDK REST) endpoint used by "data_execute_rpc".
+"""
+GET_ENDPOINTS_NAME = "data_get_endpoints"
+
+
+@tool(GET_ENDPOINTS_NAME, description=GET_ENDPOINTS_DESCRIPTION)
+def get_endpoints() -> Dict[str, str]:
+    # Report the endpoint URLs the clients are configured with
+    return {
+        "graphql": POCKET_NETWORK_DATA_ENDPOINT,
+        "rpc": POCKET_NETWORK_RPC_ENDPOINT,
+    }

@@ -318,8 +318,17 @@ GRAPHQL_REGISTRY = {
         name="getSupplyCompositionBetweenDates",
         description="Returns a JSON list containing the detailed supply composition (staked in apps/services/gateways/suppliers, DAO treasury, wrapped pokt, etc) along with the total supply, the date and block of the data. Usefull for network-wide supply evolution analisys, total staked tokens analysis, total migrated tokens, etc.",
         fields_notes={
-            "truncInterval": 'Set to "day" if the user is asking for current supply and use current date and day before for the date limits.',
+            "truncInterval": 'Granularity of the returned series ("day", "month", "year"). Set to "day" if the user is asking for current supply and use current date and day before for the date limits. For long spans (multiple years) prefer "month" or "year" so a single query returns one point per interval instead of one per day.',
         },
+        examples=[
+            "# Current supply breakdown and total supply (one snapshot)\n"
+            'query { getSupplyCompositionBetweenDates(startDate: "2026-06-24T00:00:00Z", '
+            'endDate: "2026-06-25T00:00:00Z", truncInterval: "day") }',
+            "# Efficiently get the supply breakdown AND total supply across several years\n"
+            "# in monthly intervals with a single query (one point per month, not per day)\n"
+            'query { getSupplyCompositionBetweenDates(startDate: "2023-01-01T00:00:00Z", '
+            'endDate: "2026-06-25T00:00:00Z", truncInterval: "month") }',
+        ],
     ),
     "getTotalSupplyByDay": QueryFieldInfo(
         name="getTotalSupplyByDay",
