@@ -391,6 +391,7 @@ GRAPHQL_REGISTRY = {
         description="Returns the total number of suppliers, rewards (CUs, upokt, relays) stake for a given domain name in each of their staked services.",
         fields_notes={
             "domains": 'A vector of domains to query: ["foo.bar", "example.com", ...]. extracted normally from the staked endpoint data of a supplier.',
+            "endTs/startTs": "These only respect DAY granularity, it will ignore any hours-min-sec passed, it is a DATE field, not a DATETIME",
         },
     ),
     "getSupplierStatsByDomains": QueryFieldInfo(
