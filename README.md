@@ -37,6 +37,46 @@ Deploy on a server with bearer-token auth:
 MCP_API_KEY=your-secret uv run mcp_server_remote.py
 ```
 
+### Remote Mode (Docker)
+
+A `Dockerfile` and `docker-compose.yml` are provided to run the remote (Streamable HTTP) server in a container.
+
+Build and run with plain Docker:
+
+```bash
+docker build -t pokt-data-agent-mcp .
+
+docker run -p 8000:8000 \
+  -e POCKET_NETWORK_RPC_ENDPOINT=https://sauron-api.infra.pocket.network \
+  -e POCKET_NETWORK_DATA_ENDPOINT=https://data.pocket.network/ \
+  -e MCP_API_KEY=your-secret-token \
+  pokt-data-agent-mcp
+```
+
+Or with Docker Compose (reads variables from a `.env` file in the repo root):
+
+```bash
+docker compose up --build
+```
+
+The server listens on `0.0.0.0:8000/mcp` inside the container either way. See the [MCP Environment Variables](#mcp-environment-variables) table below for the full set of options (e.g. `POCKET_NETWORK_MCP_EXPOSURE`, `LLM_BASE_URL`, `LLM_MODEL`).
+
+#### Prebuilt image
+
+Every GitHub Release automatically builds and publishes a multi-arch (amd64/arm64) image to GitHub Container Registry (see `.github/workflows/docker-release.yml`), tagged with the release version and `latest`. Pull it directly instead of building locally:
+
+```bash
+docker pull ghcr.io/pokt-network/pokt-data-agent:latest
+# or pin to a release, e.g.:
+docker pull ghcr.io/pokt-network/pokt-data-agent:v0.1.0
+
+docker run -p 8000:8000 \
+  -e POCKET_NETWORK_RPC_ENDPOINT=https://sauron-api.infra.pocket.network \
+  -e POCKET_NETWORK_DATA_ENDPOINT=https://data.pocket.network/ \
+  -e MCP_API_KEY=your-secret-token \
+  ghcr.io/pokt-network/pokt-data-agent:latest
+```
+
 ## MCP Environment Variables
 
 | Variable | Description | Default | Requiered |

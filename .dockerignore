@@ -1,0 +1,17 @@
+.git
+.github
+.venv
+.vscode
+.claude
+__pycache__
+*.pyc
+*.egg-info
+dist
+build
+.ruff_cache
+.pytest_cache
+untracked
+opencode.json
+.env
+*.md
+!README.md

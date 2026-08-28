@@ -66,6 +66,14 @@ Environment variables
     MCP_HOST       – Bind address (default: 0.0.0.0).
     MCP_PORT       – Bind port    (default: 8000).
     MCP_PATH       – URL path     (default: /mcp).
+    MCP_ALLOWED_HOSTS   – Comma-separated Host header allowlist (e.g.
+                          "example.com:*,127.0.0.1:*"). If set, enables
+                          DNS-rebinding Host/Origin validation on top of the
+                          Bearer-token check. Unset (default): disabled, since
+                          MCP_API_KEY is already the access boundary and a
+                          remote deployment's Host header is unpredictable
+                          (domain, reverse proxy, Docker port mapping, ...).
+    MCP_ALLOWED_ORIGINS – Comma-separated Origin header allowlist, same rules.
 
 For local / stdio use see mcp_server.py.
 """
@@ -76,6 +84,7 @@ import os
 import sys
 
 import uvicorn
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -125,10 +134,35 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
 
 
 # ---------------------------------------------------------------------------
+# Transport security (Host / Origin header validation)
+# ---------------------------------------------------------------------------
+#
+# The MCP SDK's DNS-rebinding protection only auto-enables itself for
+# host == "127.0.0.1" / "localhost" / "::1" and, when it does, only accepts
+# requests whose Host header matches one of those — which breaks any real
+# remote deployment (a domain name, a reverse proxy, a Docker port mapping
+# reached as e.g. "myhost:8000") with a 421 "Invalid Host header".
+#
+# This server already gates every request on MCP_API_KEY (see
+# BearerAuthMiddleware below), which is the actual access boundary for a
+# remote deployment, so Host/Origin header checking is disabled by default.
+# Set MCP_ALLOWED_HOSTS / MCP_ALLOWED_ORIGINS (comma-separated, entries may
+# end in ":*" to allow any port) to re-enable it as defense-in-depth.
+
+_allowed_hosts = [h.strip() for h in os.environ.get("MCP_ALLOWED_HOSTS", "").split(",") if h.strip()]
+_allowed_origins = [o.strip() for o in os.environ.get("MCP_ALLOWED_ORIGINS", "").split(",") if o.strip()]
+
+_transport_security = TransportSecuritySettings(
+    enable_dns_rebinding_protection=bool(_allowed_hosts or _allowed_origins),
+    allowed_hosts=_allowed_hosts,
+    allowed_origins=_allowed_origins,
+)
+
+# ---------------------------------------------------------------------------
 # Server instance
 # ---------------------------------------------------------------------------
 
-mcp = create_mcp_server()
+mcp = create_mcp_server(transport_security=_transport_security)
 
 # ---------------------------------------------------------------------------
 # Entry point

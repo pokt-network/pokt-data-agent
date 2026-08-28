@@ -6,7 +6,10 @@ from src.mcp_tools import AGENTS_AS_TOOLS, DATA_TOOLS, GENERAL_TOOLS, INSTROPECT
 
 
 def create_mcp_server(
-    server_name="pokt-data-agent", server_description=MCP_SERVER_DESCRIPTION, server_exposure="endpoints-tools"
+    server_name="pokt-data-agent",
+    server_description=MCP_SERVER_DESCRIPTION,
+    server_exposure="endpoints-tools",
+    transport_security=None,
 ):
     # Check envs
     server_exposure = os.getenv("POCKET_NETWORK_MCP_EXPOSURE", server_exposure)
@@ -15,6 +18,7 @@ def create_mcp_server(
     mcp = FastMCP(
         server_name,
         instructions=server_description,
+        transport_security=transport_security,
     )
 
     # Select the tool set

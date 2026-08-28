@@ -19,3 +19,4 @@ opencode.json
 
 # Others
 untracked
+.env
