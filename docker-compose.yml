@@ -8,12 +8,14 @@ services:
       POCKET_NETWORK_RPC_ENDPOINT: ${POCKET_NETWORK_RPC_ENDPOINT:-https://sauron-api.infra.pocket.network}
       POCKET_NETWORK_DATA_ENDPOINT: ${POCKET_NETWORK_DATA_ENDPOINT:-https://data.pocket.network/}
       POCKET_NETWORK_MCP_EXPOSURE: ${POCKET_NETWORK_MCP_EXPOSURE:-endpoints-tools}
-      MCP_API_KEY: ${MCP_API_KEY:?set MCP_API_KEY to a long random secret}
+      MCP_API_KEY: ${MCP_API_KEY}
       MCP_HOST: 0.0.0.0
       MCP_PORT: 8000
       MCP_PATH: ${MCP_PATH:-/mcp}
       MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
       MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-}
+      MCP_JSON_RESPONSE: ${MCP_JSON_RESPONSE:-false}
+      MCP_STATELESS_HTTP: ${MCP_STATELESS_HTTP:-false}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_MODEL: ${LLM_MODEL:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

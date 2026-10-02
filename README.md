@@ -88,6 +88,10 @@ docker run -p 8000:8000 \
 | `MCP_HOST` | Remote bind address | `0.0.0.0` | ❌ |
 | `MCP_PORT` | Remote bind port | `8000` | ❌ |
 | `MCP_PATH` | Remote URL path | `/mcp` | ❌ |
+| `MCP_ALLOWED_HOSTS` | Comma-separated Host header allowlist (e.g. `example.com:*,127.0.0.1:*`); if set, enables DNS-rebinding Host/Origin validation on top of the Bearer-token check | disabled | ❌ |
+| `MCP_ALLOWED_ORIGINS` | Comma-separated Origin header allowlist, same rules as above | disabled | ❌ |
+| `MCP_JSON_RESPONSE` | `true` to answer Streamable HTTP calls with a single JSON response instead of an SSE stream — useful behind proxies/relays that buffer or mangle SSE | `false` | ❌ |
+| `MCP_STATELESS_HTTP` | `true` to disable server-side session state (fresh transport per request, no `mcp-session-id` affinity) — useful behind a load balancer with no sticky sessions | `false` | ❌ |
 | `LLM_BASE_URL` | OpenAI-compatible LLM endpoint | `http://localhost:8087` | ❓ only when `POCKET_NETWORK_MCP_EXPOSURE` is set to expose agents |
 | `LLM_MODEL` | Selected model name | `local` | ❓ only when `POCKET_NETWORK_MCP_EXPOSURE` is set to expose agents |
 | `OPENAI_API_KEY` | API key for LLM endpoint | `not-needed` | ❌ |

@@ -74,6 +74,17 @@ Environment variables
                           remote deployment's Host header is unpredictable
                           (domain, reverse proxy, Docker port mapping, ...).
     MCP_ALLOWED_ORIGINS – Comma-separated Origin header allowlist, same rules.
+    MCP_JSON_RESPONSE    – "true" to answer Streamable HTTP calls (initialize,
+                           tools/call, ...) with a single application/json
+                           response instead of an SSE event stream. Useful
+                           behind proxies/relays that buffer or mangle SSE.
+                           Default: false (upstream SDK default).
+    MCP_STATELESS_HTTP   – "true" to disable server-side session state, so
+                           each request is handled independently (no
+                           mcp-session-id affinity needed) — a fresh
+                           transport per request. Useful when running
+                           multiple replicas behind a load balancer with no
+                           sticky sessions. Default: false.
 
 For local / stdio use see mcp_server.py.
 """
@@ -92,6 +103,14 @@ from starlette.responses import JSONResponse
 from src.mcp_utils import create_mcp_server
 
 logging.basicConfig(level=logging.WARNING)
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
 
 # ---------------------------------------------------------------------------
 # Bearer-token auth middleware
@@ -162,7 +181,11 @@ _transport_security = TransportSecuritySettings(
 # Server instance
 # ---------------------------------------------------------------------------
 
-mcp = create_mcp_server(transport_security=_transport_security)
+mcp = create_mcp_server(
+    transport_security=_transport_security,
+    json_response=_env_bool("MCP_JSON_RESPONSE"),
+    stateless_http=_env_bool("MCP_STATELESS_HTTP"),
+)
 
 # ---------------------------------------------------------------------------
 # Entry point
