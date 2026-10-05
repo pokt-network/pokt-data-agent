@@ -80,6 +80,13 @@ class TestQueryGuards(unittest.TestCase):
             guard(query)
         self.assertLess(time.monotonic() - start, 1)
 
+    def test_long_fragment_chain_is_refused(self):
+        n = 2000
+        query = "{ ...F0 } " + " ".join(f"fragment F{i} on Query {{ ...F{i + 1} }}" for i in range(n))
+        query += f' fragment F{n} on Query {{ block(id: "1") {{ id }} }}'
+        with self.assertRaisesRegex(GraphQLError, "too deeply nested"):
+            guard(query)
+
     def test_every_registry_example_passes(self):
         for name, info in GRAPHQL_REGISTRY.items():
             for example in info.examples:

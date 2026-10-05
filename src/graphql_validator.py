@@ -96,16 +96,20 @@ def check_query_guards(document: DocumentNode) -> Optional[str]:
     """Return why an LLM-generated query must not be sent, or None when it may be.
 
     Raises GraphQLError for a fragment that reaches itself, directly or through nested fields, and for a query that
-    expands to more than MAX_VISITED_FIELDS fields.
+    expands to more than MAX_VISITED_FIELDS fields or nests deeper than the recursion limit.
     """
     fragments = {d.name.value: d for d in document.definitions if isinstance(d, FragmentDefinitionNode)}
     visited = [0]
-    for definition in document.definitions:
-        if isinstance(definition, OperationDefinitionNode):
-            for field, path in _child_fields(definition.selection_set, fragments):
-                error = _check_field(field, fragments, path, visited)
-                if error:
-                    return f"Query refused: {error}"
+    try:
+        for definition in document.definitions:
+            if isinstance(definition, OperationDefinitionNode):
+                for field, path in _child_fields(definition.selection_set, fragments):
+                    error = _check_field(field, fragments, path, visited)
+                    if error:
+                        return f"Query refused: {error}"
+    except RecursionError:
+        # A chain of about a thousand fragments, each spreading the next, is deeper than Python's recursion limit.
+        raise GraphQLError("Query too deeply nested to check.") from None
     return None
 
 

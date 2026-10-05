@@ -40,7 +40,6 @@ class TestErrorClassification(unittest.TestCase):
         for error in (BUCKET_CAP, SCHEMA, EMPTY_LIST, TOP_ZERO):
             with self.subTest(error=error):
                 self.assertTrue(is_fixable_query_error(error))
-                self.assertIsNone(final_error_reply(error))
                 self.assertFalse(is_coverage_error(error))
 
     def test_list_limits_are_not_fixable(self):
@@ -56,6 +55,8 @@ class TestErrorClassification(unittest.TestCase):
         self.assertIn("being rebuilt", final_error_reply(REBUILD))
         self.assertIn("Too many addresses: 201, the limit is 200 per question", final_error_reply(TOO_MANY_IDS))
         self.assertIn("top 200 services", final_error_reply(TOP_TOO_HIGH))
+        self.assertEqual(final_error_reply(EMPTY_LIST), "The question needs at least one of the services to look up.")
+        self.assertIn("at least one", final_error_reply(TOP_ZERO))
         for error in (BUCKET_CAP, SCHEMA, TIMEOUT, None):
             with self.subTest(error=error):
                 self.assertIsNone(final_error_reply(error))
@@ -114,6 +115,31 @@ class TestMainAgentCoverage(unittest.TestCase):
         agent.sub_agents = []
         notes = agent._format_refusal({"user_query": "income in July 2025", "error": COVERAGE})["agent_notes"]
         self.assertEqual(notes, final_error_reply(COVERAGE))
+        agent.llm.invoke.assert_not_called()
+
+    def test_empty_list_reaches_the_user_after_the_retries(self):
+        # "What did I earn last week?" with no address: every rebuilt query still has an empty list.
+        llm = mock.MagicMock()
+        llm.bind_tools.return_value.invoke.return_value = mock.MagicMock(
+            tool_calls=[],
+            content='{"endpoint_type": "graphql", "endpoint_method": "getIncomeJson", "query": '
+            '"{ getIncomeJson(addresses: [], rangeStart: \\"2026-09-28T00:00:00Z\\", '
+            'rangeEnd: \\"2026-10-05T00:00:00Z\\") }"}',
+        )
+        sub_agent = SettlementRewardsAgent(llm)
+        sub_agent.graphql_client = mock.MagicMock()
+        empty = "GraphQL errors: addresses must have between 1 and 200 elements (has 0)"
+        sub_agent.graphql_client.execute_query.return_value = (False, None, empty)
+
+        agent = PocketNetworkAgent.__new__(PocketNetworkAgent)
+        agent.llm = mock.MagicMock()
+        agent.sub_agents = [sub_agent]
+        state = {"user_query": "what did I earn last week?", "selected_subagent": sub_agent, "agent_notes": ""}
+        state.update(agent._build_query(state))
+        self.assertEqual(sub_agent.graphql_client.execute_query.call_count, 5)
+        self.assertEqual(
+            agent._format_refusal(state)["agent_notes"], "The question needs at least one of the addresses to look up."
+        )
         agent.llm.invoke.assert_not_called()
 
     def test_list_limit_is_reported_without_a_retry(self):

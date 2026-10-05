@@ -155,7 +155,11 @@ def final_error_reply(error: str | None) -> str | None:
             "Not available right now: the settlement summary tables are being rebuilt, so there is no number to "
             "report for this range yet. Try again later."
         )
+    # An empty list or a top below 1 is retried first (is_fixable_query_error); it reaches here when the retries could
+    # not fill it, e.g. a question with no address.
     match = LIST_LIMIT.search(error)
+    if match and int(match.group(3)) < 1:
+        return f"The question needs at least one of the {match.group(1)} to look up."
     if match and int(match.group(3)) > int(match.group(2)):
         name, limit, count = match.group(1), match.group(2), match.group(3)
         return (
@@ -163,6 +167,8 @@ def final_error_reply(error: str | None) -> str | None:
             f"{limit} and add the results."
         )
     match = TOP_LIMIT.search(error)
+    if match and int(match.group(2)) < 1:
+        return "Say how many of the top services to rank (at least one)."
     if match and int(match.group(2)) > int(match.group(1)):
         return f"At most the top {match.group(1)} services can be ranked per question (asked for {match.group(2)})."
     return None
