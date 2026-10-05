@@ -2,6 +2,7 @@
 
 import logging
 import os
+import time
 from typing import Any, Dict
 
 import requests
@@ -13,11 +14,23 @@ _ENDPOINT = os.getenv("POCKET_NETWORK_DATA_ENDPOINT", None)
 if _ENDPOINT is None:
     raise ValueError('The "POCKET_NETWORK_DATA_ENDPOINT" enviroment variable is not set.')
 
+# Introspection answers are cached, and the whole cache expires after CACHE_TTL_SECONDS so that a long-running server
+# sees the fields the API adds (and stops offering those it removes) without a restart.
+CACHE_TTL_SECONDS = 3600
 _CACHE: Dict[str, Any] = {}
+_cache_started_at = time.monotonic()
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _expire_cache() -> None:
+    """Empty the cache once it is older than CACHE_TTL_SECONDS."""
+    global _cache_started_at
+    if time.monotonic() - _cache_started_at > CACHE_TTL_SECONDS:
+        _CACHE.clear()
+        _cache_started_at = time.monotonic()
 
 
 def _introspect(query: str) -> Any:
@@ -110,6 +123,7 @@ GET_FIELD_SCHEMA_NAME = "data_get_field_schema"
 
 @tool(GET_FIELD_SCHEMA_NAME, description=GET_FIELD_SCHEMA_DESCRIPTION)
 def get_field_schema(field_name: str) -> str:
+    _expire_cache()
     cache_key = f"field_schema:{field_name}"
     if cache_key in _CACHE:
         logger.debug("[tools] cache hit for %s", cache_key)
@@ -198,6 +212,7 @@ GET_TYPE_INFO_NAME = "data_get_type_info"
 
 @tool(GET_TYPE_INFO_NAME, description=GET_TYPE_INFO_DESCRIPTION)
 def get_type_info(type_name: str) -> str:
+    _expire_cache()
     cache_key = f"type:{type_name}"
     if cache_key in _CACHE:
         logger.debug("[tools] cache hit for %s", cache_key)
@@ -269,6 +284,7 @@ GET_ENUM_VALUES_NAME = "data_get_enum_values"
 
 @tool(GET_ENUM_VALUES_NAME, description=GET_ENUM_VALUES_DESCRIPTION)
 def get_enum_values(enum_name: str) -> str:
+    _expire_cache()
     cache_key = f"enum:{enum_name}"
     if cache_key in _CACHE:
         logger.debug("[tools] cache hit for %s", cache_key)
