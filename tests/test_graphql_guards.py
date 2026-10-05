@@ -126,6 +126,12 @@ class TestExecuteGraphqlTool(unittest.TestCase):
         client.return_value.execute_query.assert_not_called()
 
     @mock.patch("src.tools_data.PocketNetworkAPIClient")
+    def test_deeply_nested_query_is_refused(self, client):
+        query = "{" + "a{" * 600 + "b" + "}" * 600 + "}"
+        self.assertEqual(execute_graphql.func(query=query), (False, None, "Query too deeply nested"))
+        client.return_value.execute_query.assert_not_called()
+
+    @mock.patch("src.tools_data.PocketNetworkAPIClient")
     def test_large_result_is_truncated_with_a_notice(self, client):
         client.return_value.execute_query.return_value = (True, {"x": "a" * (MAX_RESULT_CHARS + 10)}, None)
         success, result, error = execute_graphql.func(query="{ x: getDaoBalanceAtHeight }")

@@ -197,6 +197,9 @@ def execute_graphql(query: str) -> Tuple[bool, Any, str | None]:
         guard_error = check_query_guards(parse(query))
     except GraphQLError as e:
         return False, None, f"GraphQL validation error: {e}"
+    except RecursionError:
+        # parse() recurses once per nested selection: a few hundred levels exceed Python's recursion limit.
+        return False, None, "Query too deeply nested"
     if guard_error:
         return False, None, guard_error
 

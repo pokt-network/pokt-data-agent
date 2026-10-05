@@ -1,3 +1,4 @@
+import json
 import re
 import unittest
 from unittest import mock
@@ -141,6 +142,34 @@ class TestMainAgentCoverage(unittest.TestCase):
             agent._format_refusal(state)["agent_notes"], "The question needs at least one of the addresses to look up."
         )
         agent.llm.invoke.assert_not_called()
+
+    def test_empty_list_reply_survives_a_last_attempt_refused_by_the_guards(self):
+        # Four attempts send an empty list; the fifth is refused before execution (connection without "first").
+        def envelope(method, query):
+            return mock.MagicMock(
+                tool_calls=[],
+                content=json.dumps({"endpoint_type": "graphql", "endpoint_method": method, "query": query}),
+            )
+
+        empty_query = '{ getIncomeJson(addresses: [], rangeStart: "2026-09-28T00:00:00Z") }'
+        llm = mock.MagicMock()
+        llm.bind_tools.return_value.invoke.side_effect = [envelope("getIncomeJson", empty_query)] * 4 + [
+            envelope("suppliers", "{ suppliers { nodes { id } } }")
+        ]
+        sub_agent = SettlementRewardsAgent(llm)
+        sub_agent.graphql_client = mock.MagicMock()
+        empty = "GraphQL errors: addresses must have between 1 and 200 elements (has 0)"
+        sub_agent.graphql_client.execute_query.return_value = (False, None, empty)
+
+        agent = PocketNetworkAgent.__new__(PocketNetworkAgent)
+        agent.llm = mock.MagicMock()
+        agent.sub_agents = [sub_agent]
+        state = {"user_query": "what did I earn last week?", "selected_subagent": sub_agent, "agent_notes": ""}
+        state.update(agent._build_query(state))
+        self.assertEqual(sub_agent.graphql_client.execute_query.call_count, 4)
+        self.assertEqual(
+            agent._format_refusal(state)["agent_notes"], "The question needs at least one of the addresses to look up."
+        )
 
     def test_list_limit_is_reported_without_a_retry(self):
         agent = PocketNetworkAgent.__new__(PocketNetworkAgent)
