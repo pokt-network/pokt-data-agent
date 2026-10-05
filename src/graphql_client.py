@@ -77,6 +77,22 @@ class PocketNetworkAPIClient:
             return False, None, f"Unexpected error: {str(e)}"
 
 
+# Rules shared by the settlement catalog functions (get...Json, moneyCoverageJson), which read precomputed
+# settlement tables: fast, but they cover settlements from a starting height only and cap the range per bucket.
+COVERAGE_NOTE = (
+    "The settlement data starts at a height that moves back toward genesis while the history is filled (mainnet: "
+    "April 2026 as of October 2026; moneyCoverageJson tells). A range that starts before it, or crosses a gap, is an "
+    "error, never 0: report that range as not covered yet, and do not retry it."
+)
+CATALOG_NOTES = {
+    "rangeStart/rangeEnd": "The range [start, end) in UTC with an explicit zone, e.g. 2026-10-01T00:00:00Z. Pass both.",
+    "bucket": "Omit for one total per row, or hour (range up to 7 days), day (up to 92 days), week (up to 366 days), month or year. A range longer than the bucket allows is an error that names the bucket to use.",
+    "coverage": COVERAGE_NOTE,
+    "result": 'A JSON array of rows with snake_case keys; amounts and counts are strings (upokt). "all" in a column means the rows are not split by it. Within a covered range, a missing row means 0.',
+}
+# The legacy... functions keep the arguments and JSON of the functions they replace, read from the same tables.
+LEGACY_NOTES = {"coverage": COVERAGE_NOTE}
+
 # Registry of available GraphQL query fields with descriptions
 GRAPHQL_REGISTRY = {
     "balances": QueryFieldInfo(
@@ -136,46 +152,6 @@ GRAPHQL_REGISTRY = {
             "numClaimedComputedUnits": "Number of CUs claimed by the supplier",
             "numEstimatedComputedUnits": "Network estimation of real CUs done by the supplier (after relay mining difficulty calculation)",
             "claimedAmount": "Total upokt requested by the supplier that should be burnt from the application",
-        },
-    ),
-    "relayByBlockAndServices": QueryFieldInfo(
-        name="relayByBlockAndServices",
-        description="Query relay data grouped by services with aggregates (claimedUpokt, computedUnits, relays). Usefull to explore the traffic on services at anetwork level.",
-        fields_notes={
-            "relays": "Number of relays performed.",
-            "computedUnits": "Number of CUs claimed by suppliers",
-            "claimedUpokt": "Total upokt requested by suppliers.",
-        },
-        examples=[
-            "# Per-service traffic totals in a time window (grouped aggregates)\n"
-            "query { relayByBlockAndServices(filter: {block: {timestamp: "
-            '{greaterThanOrEqualTo: "2026-06-10T00:00:00Z", lessThan: "2026-06-11T00:00:00Z"}}}) '
-            "{ groupedAggregates(groupBy: SERVICE_ID) { keys sum { relays estimatedRelays computedUnits "
-            "estimatedComputedUnits claimedUpokt } } } }",
-        ],
-    ),
-    "getMintBreakdownBetweenDates": QueryFieldInfo(
-        name="getMintBreakdownBetweenDates",
-        description="Provides information on the minting, inflation, reinbourcements, etc. for the whole network in a period. These correspond to the Token Logic Modules implemented in the network.",
-        fields_notes={
-            "reimbursement": "Total upokt that suppliers claim for reinbourcement. This is used to offset the network global inflation.",
-            "inflation": "Total upokt minted on top of the min/burn due to the network global inflation parameter.",
-            "mint_burn": 'Total upokt requested to be minted in exchange for service. Note that the total amount burned is not this one, it depends on the network "mint_ratio" parameter.',
-        },
-    ),
-    "getBurnBreakdownBetweenDates": QueryFieldInfo(
-        name="getBurnBreakdownBetweenDates",
-        description="Provides information on the burning for the whole network in a period.",
-        fields_notes={
-            "burn_mint": 'Total upokt to be burned in exchange for service. Note that the total amount minted is not this one, it depends on the network "mint_ratio" parameter.'
-        },
-    ),
-    "modToAcctTransfers": QueryFieldInfo(
-        name="modToAcctTransfers",
-        description='Tracks the rewards payed out by the network. This will provide exact earnings of an account (recipient) with maximum granularity, use this when other queries do not provide enough granularity or you need data for an specific block (otherwise look for "getRewardsByAddress..." methods).',
-        fields_notes={
-            "amount": "Total upokt transfered.",
-            "recipient": "Entity receiving the tokens, a pokt address.",
         },
     ),
     "msgStakeApplications": QueryFieldInfo(
@@ -349,7 +325,7 @@ GRAPHQL_REGISTRY = {
     ),
     "getClaimProofsDataByDelegatorsAndTime": QueryFieldInfo(
         name="getClaimProofsDataByDelegatorsAndTime",
-        description='Fast method for retrieving rewards received by an address or group of them in the given time with granularity, result returned per-address. The "delegators" in the name are supplier rev_share addresses: addresses configured in a supplier\'s rev_share that receive a share of its reward tokens (NOT validator/consensus delegators, nor owners of the stake).',
+        description='Claims created, claims settled (proofs) and claims expired, in relays, compute units and upokt, of the suppliers whose current rev_share includes the given addresses, in the given time with granularity. It does NOT return the rewards the addresses received: use getIncomeJson for that. The "delegators" in the name are supplier rev_share addresses: addresses configured in a supplier\'s rev_share that receive a share of its reward tokens (NOT validator/consensus delegators, nor owners of the stake).',
         fields_notes={
             "addresses": 'A vector of supplier rev_share addresses to query: ["pokt1....", "pokt1...."]. These are the addresses receiving reward tokens from suppliers.',
         },
@@ -358,33 +334,6 @@ GRAPHQL_REGISTRY = {
             'query { getClaimProofsDataByDelegatorsAndTime(addresses: ["pokt1..."], '
             'startTs: "2026-06-01T00:00:00Z", endTs: "2026-06-11T00:00:00Z", truncInterval: "day") }',
         ],
-    ),
-    "getRewardsByAddressesAndTimeGroupByService": QueryFieldInfo(
-        name="getRewardsByAddressesAndTimeGroupByService",
-        description="Fast method for retrieving rewards received by an address or group of them, dividing the total rewards per service. Usefull for tracking which service is providing most gains.",
-        fields_notes={
-            "addresses": 'A vector of the rev-share addresses (the ones receiving tokens) to query: ["pokt1....", "pokt1...."].',
-        },
-        examples=[
-            "# Rewards of a group of rev-share addresses (the ones receiving tokens) broken down by service\n"
-            'query { getRewardsByAddressesAndTimeGroupByService(addresses: ["pokt1..."], '
-            'startTs: "2026-06-01T00:00:00Z", endTs: "2026-06-11T00:00:00Z") }',
-        ],
-    ),
-    "getRewardsBySuppliersAndTimeGroupByAddressAndDate": QueryFieldInfo(
-        name="getRewardsBySuppliersAndTimeGroupByAddressAndDate",
-        description="Fast method for retrieving rewards received by an address or group of them, from an specific group of suppliers, in the given time with granularity. Usefull for tracking the amount of rewards that an output address received from the selected suppliers.",
-        fields_notes={
-            "addresses": 'A vector of addresses to query: ["pokt1....", "pokt1...."]. These should be output addresses of the suppliers, i.e. their rev-share addresses (the ones receiving tokens from those suppliers).',
-            "supplierAddresses": 'A vector of addresses to query: ["pokt1....", "pokt1...."]. These are the suppliers that are providing rewards to the "addresses".',
-        },
-    ),
-    "getRewardsBySuppliersAndTimeGroupByService": QueryFieldInfo(
-        name="getRewardsBySuppliersAndTimeGroupByService",
-        description="Fast method for retrieving rewards received by a group of suppliers, dividing the total rewards per service. Usefull for tracking which service is providing most gains to a supplier (track service performance for operator).",
-        fields_notes={
-            "operatorAddresses": 'A vector of addresses to query: ["pokt1....", "pokt1...."]. These are the suppliers that are providing rewards. They are the address that own the suppliers, not the output addresses.',
-        },
     ),
     "getRewardsByDomainsAndTimeGroupByService": QueryFieldInfo(
         name="getRewardsByDomainsAndTimeGroupByService",
@@ -501,7 +450,7 @@ GRAPHQL_REGISTRY = {
     ),
     "nativeTransfers": QueryFieldInfo(
         name="nativeTransfers",
-        description='Tracks native token transfers (MsgSend) between accounts. Filter by senderId and/or recipientId to get the transfer history of a wallet (who sent tokens to whom). This complements "modToAcctTransfers", which only tracks reward payouts from network modules.',
+        description="Tracks native token transfers (MsgSend) between accounts. Filter by senderId and/or recipientId to get the transfer history of a wallet (who sent tokens to whom). Reward payouts from network modules are not transfers: use getIncomeJson for them.",
         fields_notes={
             "senderId": 'The address sending the tokens (must start with "pokt1").',
             "recipientId": 'The address receiving the tokens (must start with "pokt1").',
@@ -628,18 +577,6 @@ GRAPHQL_REGISTRY = {
             'endTimestamp: "2026-06-11T00:00:00Z", truncInterval: "day") }',
         ],
     ),
-    "getRewardsByAddressesAndTime": QueryFieldInfo(
-        name="getRewardsByAddressesAndTime",
-        description="Fast method returning the plain total rewards (upokt) received by a group of addresses in a date range, with no grouping. This is the cheapest rewards rollup; use the GroupByService / GroupByAddressAndDate variants only when a breakdown is needed.",
-        fields_notes={
-            "addresses": 'A vector of rev-share addresses (the ones receiving tokens) to query: ["pokt1....", "pokt1...."].',
-        },
-        examples=[
-            "# Total rewards of a group of rev-share addresses (the ones receiving tokens) in a date range (single number)\n"
-            'query { getRewardsByAddressesAndTime(addresses: ["pokt1..."], '
-            'startDate: "2026-06-10T00:00:00Z", endDate: "2026-06-11T00:00:00Z") }',
-        ],
-    ),
     "getProducedBlocksByValidator": QueryFieldInfo(
         name="getProducedBlocksByValidator",
         description='Returns the blocks produced by a validator since the given block id. Combine with "getMissingValidatorBlocks" to compute validator uptime.',
@@ -698,6 +635,261 @@ GRAPHQL_REGISTRY = {
             "# Applications staked for a given service\n"
             'query { applicationServices(filter: {serviceId: {equalTo: "eth"}}, first: 20) '
             "{ totalCount nodes { applicationId } } }",
+        ],
+    ),
+    # --------------------------------------------------------------------------------------------------------------
+    # Settlement catalog: precomputed settlement (money) tables. See CATALOG_NOTES for the rules every one follows.
+    # --------------------------------------------------------------------------------------------------------------
+    "getIncomeJson": QueryFieldInfo(
+        name="getIncomeJson",
+        description="Income received by any address (supplier rev_share/shareholder addresses, service owners, the DAO, validators, delegators) in a time range: one row per role, optionally split by the supplier that generated it, by service, by reason (relay / global mint) and by address. Use it for every 'how much did these addresses earn' question: totals, per service, per supplier, per day.",
+        fields_notes={
+            **CATALOG_NOTES,
+            "addresses": "Required: 1 to 200 receiving addresses.",
+            "byAddress": "true (default) = one row per address; false = one total for the whole list.",
+            "bySupplier/byService/byReason": "Split by the supplier that generated the income, by service, or by reason (family column: relay / global).",
+            "amount_upokt": "upokt received. There is one row per role (e.g. rev_share, source_owner): add the rows for the address total.",
+        },
+        examples=[
+            "# Total income of a group of addresses in a week (add the rows: one per role)\n"
+            'query { getIncomeJson(addresses: ["pokt1..."], rangeStart: "2026-09-28T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z", byAddress: false) }',
+            "# Income per service and per day\n"
+            'query { getIncomeJson(addresses: ["pokt1..."], rangeStart: "2026-09-28T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z", bucket: "day", byService: true) }',
+            "# Finest grain: per hour, per supplier and per reason (hour allows up to 7 days)\n"
+            'query { getIncomeJson(addresses: ["pokt1..."], rangeStart: "2026-10-04T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z", bucket: "hour", bySupplier: true, byReason: true) }',
+        ],
+    ),
+    "legacyRewardsByAddressesAndTimeGroupByService": QueryFieldInfo(
+        name="legacyRewardsByAddressesAndTimeGroupByService",
+        description="Rewards received by a group of addresses, split by service, with the gross rewards, relays and compute units of the claims that paid them. Same arguments and JSON as the former getRewardsByAddressesAndTimeGroupByService, read from the settlement tables; gross_rewards, relays and compute units count each claim once (the former function counted a claim once per transfer). For net income only, getIncomeJson(byService: true) is the same number.",
+        fields_notes={
+            **LEGACY_NOTES,
+            "addresses": 'A vector of the rev-share addresses (the ones receiving tokens) to query: ["pokt1....", "pokt1...."].',
+            "net_rewards": "upokt the addresses received from the service.",
+            "gross_rewards": "upokt claimed by the claims that paid the addresses.",
+        },
+        examples=[
+            "# Rewards of a group of rev-share addresses broken down by service\n"
+            'query { legacyRewardsByAddressesAndTimeGroupByService(addresses: ["pokt1..."], '
+            'startTs: "2026-09-28T00:00:00Z", endTs: "2026-10-05T00:00:00Z") }',
+        ],
+    ),
+    "legacyRewardsBySuppliersAndTimeGroupByAddressAndDate": QueryFieldInfo(
+        name="legacyRewardsBySuppliersAndTimeGroupByAddressAndDate",
+        description="Rewards received by a group of addresses from a specific group of suppliers, per address and per interval. Same arguments and JSON as the former getRewardsBySuppliersAndTimeGroupByAddressAndDate, read from the settlement tables.",
+        fields_notes={
+            **LEGACY_NOTES,
+            "addresses": 'A vector of addresses to query: ["pokt1....", "pokt1...."]. These should be output addresses of the suppliers, i.e. their rev-share addresses (the ones receiving tokens from those suppliers).',
+            "supplierAddresses": 'A vector of addresses to query: ["pokt1....", "pokt1...."]. These are the suppliers that are providing rewards to the "addresses".',
+            "truncInterval": 'Interval of each point: "hour", "day", "week", "month" (any range length).',
+        },
+        examples=[
+            "# Daily rewards an address received from given suppliers\n"
+            'query { legacyRewardsBySuppliersAndTimeGroupByAddressAndDate(addresses: ["pokt1..."], '
+            'supplierAddresses: ["pokt1..."], startDate: "2026-09-28T00:00:00Z", endDate: "2026-10-05T00:00:00Z", '
+            'truncInterval: "day") }',
+        ],
+    ),
+    "getSupplierEarningsJson": QueryFieldInfo(
+        name="getSupplierEarningsJson",
+        description="What suppliers earned: claimed and settled upokt, overservicing loss, relays, estimated relays, compute units and settled claims (with and without a proof), optionally per service, per application and per supplier. Use it for a supplier's or an operator's performance per service.",
+        fields_notes={
+            **CATALOG_NOTES,
+            "suppliers": "Supplier (operator) addresses, up to 200; omit both suppliers and owners for every supplier (then use bySupplier: false).",
+            "owners": "Owner addresses in place of suppliers: the suppliers they own now.",
+            "byService/byApplication/bySupplier": "Split by service, by application, or per supplier (bySupplier defaults to true when suppliers are given).",
+            "claimed_upokt": "upokt the suppliers claimed; settled_upokt is what was paid after overservicing.",
+        },
+        examples=[
+            "# A supplier's earnings per service in a week\n"
+            'query { getSupplierEarningsJson(suppliers: ["pokt1..."], rangeStart: "2026-09-28T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z", byService: true, bySupplier: false) }',
+            "# All suppliers of an owner, per day\n"
+            'query { getSupplierEarningsJson(owners: ["pokt1..."], rangeStart: "2026-09-28T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z", bucket: "day", bySupplier: false) }',
+        ],
+    ),
+    "getSupplierProofsJson": QueryFieldInfo(
+        name="getSupplierProofsJson",
+        description="Proof activity of suppliers: claims settled with and without a proof, proofs submitted, validated and invalid (by reason), each counted in the block of its own event. Omit suppliers (and use bySupplier: false) for the whole network.",
+        fields_notes={
+            **CATALOG_NOTES,
+            "suppliers": "Supplier addresses, up to 200; omit for every supplier.",
+            "owners": "Owner addresses in place of suppliers.",
+        },
+        examples=[
+            "# Network-wide proofs per day\n"
+            'query { getSupplierProofsJson(rangeStart: "2026-09-28T00:00:00Z", rangeEnd: "2026-10-05T00:00:00Z", '
+            'bucket: "day", bySupplier: false) }',
+        ],
+    ),
+    "getSupplierPenaltiesJson": QueryFieldInfo(
+        name="getSupplierPenaltiesJson",
+        description="Penalties of suppliers: expired claims (by reason), discarded claims and slashes, with their amounts.",
+        fields_notes={
+            **CATALOG_NOTES,
+            "suppliers": "Supplier addresses, up to 200.",
+            "owners": "Owner addresses in place of suppliers.",
+        },
+        examples=[
+            "# Expired claims, discards and slashes of a supplier, per service\n"
+            'query { getSupplierPenaltiesJson(suppliers: ["pokt1..."], rangeStart: "2026-09-28T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z", byService: true) }',
+        ],
+    ),
+    "getSupplierDistributionJson": QueryFieldInfo(
+        name="getSupplierDistributionJson",
+        description="How what a supplier generated was paid out: to each rev_share/shareholder address, the DAO, the service owner, and the stakers in one row, optionally by reason (relay / global mint).",
+        fields_notes={
+            **CATALOG_NOTES,
+            "suppliers": "Required unless owners is given: supplier addresses, up to 200.",
+            "owners": "Owner addresses in place of suppliers.",
+        },
+        examples=[
+            "# Payout split of a supplier in a week\n"
+            'query { getSupplierDistributionJson(suppliers: ["pokt1..."], rangeStart: "2026-09-28T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z") }',
+        ],
+    ),
+    "getApplicationSpendJson": QueryFieldInfo(
+        name="getApplicationSpendJson",
+        description="What applications paid (burned_upokt), the overserviced work they did not pay, reimbursements, relays, compute units and claims, optionally per service, per supplier and per application.",
+        fields_notes={
+            **CATALOG_NOTES,
+            "applications": "Required: 1 to 200 application addresses.",
+        },
+        examples=[
+            "# An application's spend per service in a week\n"
+            'query { getApplicationSpendJson(applications: ["pokt1..."], rangeStart: "2026-09-28T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z", byService: true) }',
+        ],
+    ),
+    "getGatewaySpendJson": QueryFieldInfo(
+        name="getGatewaySpendJson",
+        description="What the applications delegated to each gateway spent, by the delegation in force at each settlement, optionally per application and per service.",
+        fields_notes={
+            **CATALOG_NOTES,
+            "gateways": "Required: 1 to 200 gateway addresses.",
+        },
+        examples=[
+            "# A gateway's delegated spend per day\n"
+            'query { getGatewaySpendJson(gateways: ["pokt1..."], rangeStart: "2026-09-28T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z", bucket: "day") }',
+        ],
+    ),
+    "getServiceUsageJson": QueryFieldInfo(
+        name="getServiceUsageJson",
+        description="Network traffic and value per service from settled claims: claimed and settled upokt, overservicing loss, relays, estimated relays, compute units, estimated compute units and claims. Pass the services, or topBySettled for the N services that settled the most. Use it for 'which services are most used / most profitable' questions.",
+        fields_notes={
+            **CATALOG_NOTES,
+            "services": 'Service ids, e.g. ["eth", "base"].',
+            "topBySettled": "1 to 200: the N services that settled the most upokt (rank_by_settled). Pass services or topBySettled (or both).",
+            "settled_upokt": "upokt paid for the service after overservicing; claimed_upokt is what suppliers claimed.",
+        },
+        examples=[
+            "# Top 20 services by settled value yesterday\n"
+            'query { getServiceUsageJson(rangeStart: "2026-10-04T00:00:00Z", rangeEnd: "2026-10-05T00:00:00Z", '
+            "topBySettled: 20) }",
+            "# Daily traffic of given services\n"
+            'query { getServiceUsageJson(services: ["eth", "base"], rangeStart: "2026-09-28T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z", bucket: "day") }',
+        ],
+    ),
+    "getSupplyFlowsJson": QueryFieldInfo(
+        name="getSupplyFlowsJson",
+        description="Network supply flows from settlement: burn, relay mint (mint_equals_burn), mint_ratio_unminted, overservicing loss, global mint and reimbursement, optionally by receiving role, plus slashes. Use it for burn and mint questions.",
+        fields_notes={
+            **CATALOG_NOTES,
+            "flow": "burn = upokt burned from applications; mint_equals_burn = upokt minted for relays; global_mint = global inflation mint; reimbursement = upokt the applications are reimbursed.",
+            "byRole": "Split each flow by the role that received it.",
+        },
+        examples=[
+            "# Burn and mint flows yesterday\n"
+            'query { getSupplyFlowsJson(rangeStart: "2026-10-04T00:00:00Z", rangeEnd: "2026-10-05T00:00:00Z") }',
+        ],
+    ),
+    "legacyMintBreakdownBetweenDates": QueryFieldInfo(
+        name="legacyMintBreakdownBetweenDates",
+        description="Provides information on the minting, inflation, reinbourcements, etc. for the whole network in a period. These correspond to the Token Logic Modules implemented in the network. Same arguments and JSON as the former getMintBreakdownBetweenDates, read from the settlement tables.",
+        fields_notes={
+            **LEGACY_NOTES,
+            "reimbursement": "Total upokt that suppliers claim for reinbourcement. This is used to offset the network global inflation.",
+            "inflation": "Total upokt minted on top of the min/burn due to the network global inflation parameter.",
+            "mint_burn": 'Total upokt requested to be minted in exchange for service. Note that the total amount burned is not this one, it depends on the network "mint_ratio" parameter.',
+        },
+        examples=[
+            "# Mint breakdown of a day\n"
+            'query { legacyMintBreakdownBetweenDates(startDate: "2026-10-04T00:00:00Z", '
+            'endDate: "2026-10-05T00:00:00Z") }',
+        ],
+    ),
+    "getValidatorRewardsJson": QueryFieldInfo(
+        name="getValidatorRewardsJson",
+        description="Validator (consensus) rewards: commission, self-delegation reward, what went to delegators, the number of distributions, and the delegated stake seen per validator (average, minimum, maximum; for an APR).",
+        fields_notes={
+            **CATALOG_NOTES,
+            "validators": 'Validator operator addresses ("poktvaloper..."), up to 200; omit for every validator.',
+            "byValidator": "One row per validator; false = one total (the stake columns are then NULL).",
+        },
+        examples=[
+            "# Rewards of every validator in a week\n"
+            'query { getValidatorRewardsJson(rangeStart: "2026-09-28T00:00:00Z", rangeEnd: "2026-10-05T00:00:00Z") }',
+        ],
+    ),
+    "getDelegatorIncomeJson": QueryFieldInfo(
+        name="getDelegatorIncomeJson",
+        description="Income of validator (consensus) delegators: what they received, optionally per validator. Not supplier rev_share 'delegators' (use getIncomeJson for those).",
+        fields_notes={
+            **CATALOG_NOTES,
+            "delegators": "Delegator addresses (pokt1...), up to 200; omit for every delegator.",
+            "validators": "Keep only the income from these validators (poktvaloper...).",
+        },
+        examples=[
+            "# What a delegator received per validator in a week\n"
+            'query { getDelegatorIncomeJson(delegators: ["pokt1..."], rangeStart: "2026-09-28T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z", byValidator: true) }',
+        ],
+    ),
+    "getAppAutoUnstakesJson": QueryFieldInfo(
+        name="getAppAutoUnstakesJson",
+        description="Applications the chain unstaked because their stake fell below the minimum. Reads the indexed events, so it is not limited by the settlement coverage.",
+        fields_notes={
+            "rangeStart/rangeEnd": CATALOG_NOTES["rangeStart/rangeEnd"],
+            "bucket": CATALOG_NOTES["bucket"],
+            "applications": "Application addresses, up to 200; omit for every application.",
+        },
+        examples=[
+            "# Auto-unstaked applications per week in a quarter\n"
+            'query { getAppAutoUnstakesJson(rangeStart: "2026-07-01T00:00:00Z", rangeEnd: "2026-10-01T00:00:00Z", '
+            'bucket: "week", byApplication: false) }',
+        ],
+    ),
+    "getParamHistoryJson": QueryFieldInfo(
+        name="getParamHistoryJson",
+        description="Governance parameter history: each version of a parameter whose value differs from the previous one, with previous_value, its height and block time. Reads the indexed params, so it is not limited by the settlement coverage.",
+        fields_notes={
+            "rangeStart/rangeEnd": CATALOG_NOTES["rangeStart/rangeEnd"],
+            "namespaces/keys": 'Filter by module namespace (e.g. ["tokenomics"]) and/or key; omit for all.',
+        },
+        examples=[
+            "# Every change of the tokenomics params in a year\n"
+            'query { getParamHistoryJson(namespaces: ["tokenomics"], rangeStart: "2025-10-01T00:00:00Z", '
+            'rangeEnd: "2026-10-01T00:00:00Z") }',
+        ],
+    ),
+    "moneyCoverageJson": QueryFieldInfo(
+        name="moneyCoverageJson",
+        description="Which part of a time range the settlement catalog covers: the first and last settlement heights written in the range, the settlement heights missing, and the recorded gaps. Use it to tell the user from when data is available.",
+        fields_notes={
+            "rangeStart/rangeEnd": CATALOG_NOTES["rangeStart/rangeEnd"],
+            "gaps": "Height ranges with no settlement data written yet (not covered).",
+        },
+        examples=[
+            "# Coverage of a month\n"
+            'query { moneyCoverageJson(rangeStart: "2026-09-01T00:00:00Z", rangeEnd: "2026-10-01T00:00:00Z") }',
         ],
     ),
 }

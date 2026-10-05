@@ -378,6 +378,8 @@ If the query cannot be constructed:
 Generate a query that answers the user's question.
 For GraphQL: use one of the given fields with appropriate filters and aggregations (if needed).
 Keep queries simple. Check for pagination. Pass numerical fields in quotes.
+Every connection that selects "nodes" or "edges" needs a "first" between 1 and 1000; for counts and sums use totalCount or aggregates.
+Settlement catalog functions (get...Json, legacy..., moneyCoverageJson) take a [start, end) range in UTC with "Z". Their bucket allows hour up to 7 days, day up to 92 days, week up to 366 days. A range before their coverage is an error, never 0: do not answer it with another function.
 
 {output_instructions}
 
@@ -649,7 +651,7 @@ class NetworkUsageAgent(QueryBuilderSubAgent):
     name = "NetworkUsageAgent"
     graphql_methods = [
         "getRewardsByDate",
-        "relayByBlockAndServices",
+        "getServiceUsageJson",
         "getRelaysByServicePerPointJson",
         "blocks",
         "getAmountOfBlocksAndSuppliersByTimes",
@@ -669,6 +671,7 @@ Always apply a filter when possible, such as a date range, block range, service 
 
 If the user asks for service traffic concentration, averages, or trends across services, use service-grouped aggregations and time truncation when possible.
 If the user asks for the daily evolution of staked actors (validators, suppliers, apps, gateways) or supply, prefer getLatestBlocksByDay, which returns one block snapshot per day.
+If the user asks for traffic or value per service (relays, compute units, upokt), prefer getServiceUsageJson, with the services asked about or topBySettled.
 If the user asks about blocks, interpret “block number” as the id of a block, which is numeric.
 If the user provides a service name or identifier, filter by that service when applicable.
 
@@ -692,8 +695,9 @@ class TokenomicsAgent(QueryBuilderSubAgent):
         "getTotalSupplyBetweenDates",
         "getSupplyCompositionBetweenDates",
         "getTotalSupplyByDay",
-        "getMintBreakdownBetweenDates",
-        "getBurnBreakdownBetweenDates",
+        "legacyMintBreakdownBetweenDates",
+        "getSupplyFlowsJson",
+        "moneyCoverageJson",
         "getComputeUnitsToTokensMultiplierEvolution",
         "getDaoBalanceAtHeight",
         "morseClaimableAccounts",
@@ -715,6 +719,7 @@ If the user asks for the DAO balance, use the block height when provided; if hei
 If the user asks about “supply composition,” prefer the method that breaks supply into staked, unstaked, supplier, application, DAO treasury, wrapped POKT, and related categories.
 If the user asks about migration progress or un-migrated supply, use morseClaimableAccounts with groupedAggregates(groupBy: CLAIMED); the unclaimed amounts are supply not yet migrated from Morse to Shannon.
 If the user asks for trends, use grouped-by-date outputs and the coarsest useful interval.
+If the user asks how much was burned or minted for relays, prefer getSupplyFlowsJson (one call returns burn, relay mint, global mint, reimbursement and overservicing); for the mint/inflation/reimbursement breakdown use legacyMintBreakdownBetweenDates.
 
 The user might use the following expressions:
 - “block height”: this is the numeric block height used for snapshot queries.
@@ -735,13 +740,18 @@ class SettlementRewardsAgent(QueryBuilderSubAgent):
     graphql_methods = [
         "eventClaimSettleds",
         "eventClaimExpireds",
-        "modToAcctTransfers",
         "getClaimProofsDataByTime",
         "getClaimProofsDataByDelegatorsAndTime",
-        "getRewardsByAddressesAndTime",
-        "getRewardsByAddressesAndTimeGroupByService",
-        "getRewardsBySuppliersAndTimeGroupByAddressAndDate",
-        "getRewardsBySuppliersAndTimeGroupByService",
+        "getIncomeJson",
+        "legacyRewardsByAddressesAndTimeGroupByService",
+        "legacyRewardsBySuppliersAndTimeGroupByAddressAndDate",
+        "getSupplierEarningsJson",
+        "getSupplierProofsJson",
+        "getSupplierPenaltiesJson",
+        "getSupplierDistributionJson",
+        "getApplicationSpendJson",
+        "getGatewaySpendJson",
+        "moneyCoverageJson",
     ]
     rpc_methods = [
         "get_claim",
@@ -760,8 +770,12 @@ You specialize in claims, proofs, settlements, expirations, account-level payout
 Your queries should strongly prefer the most specific get... methods for grouped reward analysis, and use event-level data when the user needs claim lifecycle details or penalties.
 Always apply a filter when possible, such as a date range, address list, supplier list, or service grouping, because the dataset is large.
 
-If the user asks only for the total rewards of one or more addresses with no breakdown, prefer getRewardsByAddressesAndTime, which is the cheapest rollup.
-If the user asks for exact account earnings or the most granular payout view, prefer modToAcctTransfers.
+If the user asks for the rewards or income of one or more addresses, prefer getIncomeJson: byAddress false for one total (add its rows, one per role), byService / bySupplier / bucket for a breakdown.
+If the user asks for the most granular payout view, use getIncomeJson with bucket "hour" (up to 7 days) and bySupplier, byService and byReason; per-transfer payout rows are not available.
+If the user asks for the gross rewards, relays or compute units behind an address's rewards per service, use legacyRewardsByAddressesAndTimeGroupByService.
+If the user asks what addresses received from specific suppliers, use legacyRewardsBySuppliersAndTimeGroupByAddressAndDate.
+If the user asks how a supplier or an operator performed (claimed, settled, relays per service), use getSupplierEarningsJson; for proofs getSupplierProofsJson, for expirations and slashes getSupplierPenaltiesJson, for how its rewards were split getSupplierDistributionJson.
+If the user asks what an application or a gateway spent, use getApplicationSpendJson or getGatewaySpendJson.
 If the user asks for claim lifecycle health, use settlement and expiration events together with claim-proof summaries.
 If the user provides an address, it is usually a pokt1... entity. For reward attribution, distinguish carefully between output addresses, supplier/operator addresses, and delegator-related addresses. A "delegator" of a supplier node is a rev_share address: an address configured in the supplier's rev_share, for a given service, that receives a share of its reward tokens (not a validator/consensus delegator).
 If the user asks for a “node” and the context is ambiguous, disambiguate between supplier and application.
@@ -785,13 +799,13 @@ class ServiceEconomicsAgent(QueryBuilderSubAgent):
     name = "ServiceEconomicsAgent"
     graphql_methods = [
         "services",
-        "relayByBlockAndServices",
+        "getServiceUsageJson",
         "getRelaysByServicePerPointJson",
         "getAmountOfBlocksAndSuppliersByTimes",
         "eventRelayMiningDifficultyUpdateds",
         "getRewardsByDomainsAndTimeGroupByService",
         "getSupplierStatsByDomains",
-        "getRewardsBySuppliersAndTimeGroupByService",
+        "getSupplierEarningsJson",
         "servicesPerformanceBetweenTimes",
         "getSuppliersStakedAndBlocksByPointJson",
         "applicationServices",
@@ -812,7 +826,7 @@ You specialize in service metadata, traffic concentration, service profitability
 Your queries should prefer get... methods that summarize service performance or reward distribution by service, and use service metadata or difficulty events when the user needs context about why a service behaves a certain way.
 Always apply a filter when possible, such as service ID, domain list, or date range, because service-level analysis is large and time-dependent.
 
-If the user asks which services are most active, most profitable, or have the most supplier support, use grouped and time-truncated service analytics.
+If the user asks which services are most active, most profitable, or have the most supplier support, use grouped and time-truncated service analytics; getServiceUsageJson with topBySettled ranks services by settled value.
 If the user asks to compare service performance between two periods (growth/decline), prefer servicesPerformanceBetweenTimes, which compares a current and a previous window in one call.
 If the user asks about relay-mining difficulty, interpret it as the mechanism that affects the relationship between claimed computed units and estimated computed units.
 If the user provides a service identifier or service name, filter by that service whenever possible.
@@ -834,6 +848,7 @@ class GovernanceAdminAgent(QueryBuilderSubAgent):
     name = "GovernanceAdminAgent"
     graphql_methods = [
         "params",
+        "getParamHistoryJson",
         "authzs",
         "getDaoBalanceAtHeight",
         "services",
@@ -862,6 +877,7 @@ Always apply a filter when possible, such as a block height, parameter identifie
 If the user asks who can modify what, use authorization relationships and any available execution context.
 If the user asks about protocol behavior at a given time, prefer the parameter value active at that block or the nearest relevant block context.
 If the user asks about “latest settings,” use the most recent parameter values available.
+If the user asks when or how a parameter changed over time, use getParamHistoryJson.
 
 The user might use the following expressions:
 - “height”, “block height”: a numeric block reference for snapshot context.
@@ -891,6 +907,9 @@ class StakingParticipantStateAgent(QueryBuilderSubAgent):
         "getDataByDelegatorAddressesAndTimes",
         "getDataByDelegatorAddressesAndBlocks",
         "getOverservicedByAddressesAndTime",
+        "getValidatorRewardsJson",
+        "getDelegatorIncomeJson",
+        "getAppAutoUnstakesJson",
         "eventApplicationOverserviceds",
         "eventGatewayUnbondingBegins",
         "eventGatewayUnbondingEnds",
@@ -927,6 +946,7 @@ If the user asks for counts or total stake of applications, gateways, suppliers 
 If the user asks which suppliers serve a service (or which services a supplier is staked in), use supplierServiceConfigs filtered by serviceId or supplierId.
 If the user asks about delegators of a supplier node, treat them as the supplier's rev_share addresses: the addresses configured in the supplier rev_share that receive a share of its reward tokens (for a given service configured). Use the delegator-oriented summaries for them, and do not confuse them with validator (consensus) delegators.
 If the user asks about delegators of a validator (consensus delegations), use the RPC methods: get_validator_delegations for who delegates to a validator, and get_delegator_delegations for which validators an account delegates to.
+If the user asks what a validator earned (commission, self-delegation, APR inputs) use getValidatorRewardsJson; what a validator delegator received, getDelegatorIncomeJson.
 If the user asks for node state, disambiguate between supplier, gateway, and application based on context.
 
 """
