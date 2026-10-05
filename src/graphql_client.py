@@ -342,9 +342,9 @@ GRAPHQL_REGISTRY = {
             "# Current supply breakdown and total supply (one snapshot)\n"
             'query { getSupplyCompositionBetweenDates(startDate: "2026-06-24T00:00:00Z", '
             'endDate: "2026-06-25T00:00:00Z", truncInterval: "day") }',
-            "# Efficiently get the supply breakdown AND total supply across several years\n"
+            "# Supply breakdown AND total supply over the last 12 months\n"
             "# in monthly intervals with a single query (one point per month, not per day)\n"
-            'query { getSupplyCompositionBetweenDates(startDate: "2023-01-01T00:00:00Z", '
+            'query { getSupplyCompositionBetweenDates(startDate: "2025-06-25T00:00:00Z", '
             'endDate: "2026-06-25T00:00:00Z", truncInterval: "month") }',
         ],
     ),
