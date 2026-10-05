@@ -1,10 +1,11 @@
+import time
 import unittest
 from unittest import mock
 
 from graphql import GraphQLError, parse
 
 from src.graphql_client import GRAPHQL_REGISTRY
-from src.graphql_validator import MAX_FIRST, check_query_guards, validate_graphql_query
+from src.graphql_validator import MAX_FIRST, MAX_VISITED_FIELDS, check_query_guards, validate_graphql_query
 from src.tools_data import MAX_RESULT_CHARS, execute_graphql
 
 
@@ -66,6 +67,18 @@ class TestQueryGuards(unittest.TestCase):
 
     def test_a_fragment_spread_twice_is_not_a_cycle(self):
         self.assertIsNone(guard('{ ...F ...F } fragment F on Query { block(id: "1") { id } }'))
+
+    def test_nested_fragment_fan_out_is_cut_short(self):
+        # Each fragment spreads the next one in two nested fields: 2^30 field visits without a limit.
+        n = 30
+        query = "{ ...F0 } " + " ".join(
+            f'fragment F{i} on Query {{ a: block(id: "1") {{ ...F{i + 1} }} b: block(id: "2") {{ ...F{i + 1} }} }}'
+            for i in range(n)
+        ).replace(f"...F{n}", "id")
+        start = time.monotonic()
+        with self.assertRaisesRegex(GraphQLError, f"more than {MAX_VISITED_FIELDS} fields"):
+            guard(query)
+        self.assertLess(time.monotonic() - start, 1)
 
     def test_every_registry_example_passes(self):
         for name, info in GRAPHQL_REGISTRY.items():

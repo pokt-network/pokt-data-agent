@@ -27,6 +27,9 @@ RAW_FIELD_HINT = (
 )
 # Largest page a connection may ask for; the API caps a connection at this many rows without saying so.
 MAX_FIRST = 1000
+# Most fields the guards visit in one query. Fragments spread in nested fields multiply the visits (2^n for n nested
+# levels), so the check stops there instead of taking minutes; no real query comes close.
+MAX_VISITED_FIELDS = 5000
 
 
 def _child_fields(
@@ -61,8 +64,12 @@ def _child_fields(
 
 
 def _check_field(
-    field: FieldNode, fragments: Dict[str, FragmentDefinitionNode], path: Tuple[str, ...]
+    field: FieldNode, fragments: Dict[str, FragmentDefinitionNode], path: Tuple[str, ...], visited: List[int]
 ) -> Optional[str]:
+    # visited counts the fields checked so far in the query (one shared counter).
+    visited[0] += 1
+    if visited[0] > MAX_VISITED_FIELDS:
+        raise GraphQLError(f"Query too large to check: it expands to more than {MAX_VISITED_FIELDS} fields.")
     name = field.name.value
     if name.startswith(RAW_FIELD_PREFIXES):
         return f'"{name}" reads a raw payout table and is not allowed: {RAW_FIELD_HINT}.'
@@ -79,7 +86,7 @@ def _check_field(
             )
 
     for child, child_path in children:
-        error = _check_field(child, fragments, child_path)
+        error = _check_field(child, fragments, child_path, visited)
         if error:
             return error
     return None
@@ -88,13 +95,15 @@ def _check_field(
 def check_query_guards(document: DocumentNode) -> Optional[str]:
     """Return why an LLM-generated query must not be sent, or None when it may be.
 
-    Raises GraphQLError for a fragment that reaches itself, directly or through nested fields.
+    Raises GraphQLError for a fragment that reaches itself, directly or through nested fields, and for a query that
+    expands to more than MAX_VISITED_FIELDS fields.
     """
     fragments = {d.name.value: d for d in document.definitions if isinstance(d, FragmentDefinitionNode)}
+    visited = [0]
     for definition in document.definitions:
         if isinstance(definition, OperationDefinitionNode):
             for field, path in _child_fields(definition.selection_set, fragments):
-                error = _check_field(field, fragments, path)
+                error = _check_field(field, fragments, path, visited)
                 if error:
                     return f"Query refused: {error}"
     return None

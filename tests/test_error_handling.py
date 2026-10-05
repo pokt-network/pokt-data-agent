@@ -18,6 +18,8 @@ BUCKET_CAP = (
 )
 TOO_MANY_IDS = "GraphQL errors: addresses must have between 1 and 200 elements (has 201)"
 TOP_TOO_HIGH = "GraphQL errors: top_by_settled must be between 1 and 200 (is 1000)"
+EMPTY_LIST = "GraphQL errors: services must have between 1 and 200 elements (has 0)"
+TOP_ZERO = "GraphQL errors: top_by_settled must be between 1 and 200 (is 0)"
 REBUILD = (
     "GraphQL errors: settlement heights 10 to 20 were written with rollup version 1 (current 2): "
     "run rebuild_rollups first"
@@ -34,9 +36,11 @@ class TestErrorClassification(unittest.TestCase):
                 self.assertFalse(is_fixable_query_error(error))
 
     def test_fixable_errors(self):
-        for error in (BUCKET_CAP, SCHEMA):
+        # An empty list or a top below 1: the corrected query adds what is missing, it drops nothing.
+        for error in (BUCKET_CAP, SCHEMA, EMPTY_LIST, TOP_ZERO):
             with self.subTest(error=error):
                 self.assertTrue(is_fixable_query_error(error))
+                self.assertIsNone(final_error_reply(error))
                 self.assertFalse(is_coverage_error(error))
 
     def test_list_limits_are_not_fixable(self):
@@ -85,6 +89,11 @@ class TestSubAgentRetries(unittest.TestCase):
                 decision, state = self._after_execution(error)
                 self.assertEqual(decision, "retry")
                 self.assertIn(error, self.agent._build_user_message({**state, "user_query": "q"}, attempt=2))
+
+    def test_empty_list_and_top_zero_are_retried(self):
+        for error in (EMPTY_LIST, TOP_ZERO):
+            with self.subTest(error=error):
+                self.assertEqual(self._after_execution(error)[0], "retry")
 
     def test_coverage_limit_and_transport_errors_end_the_run(self):
         for error in (COVERAGE, TOO_MANY_IDS, TOP_TOO_HIGH, TIMEOUT):

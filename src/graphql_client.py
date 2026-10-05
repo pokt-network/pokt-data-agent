@@ -104,8 +104,9 @@ COVERAGE_ERRORS = (
     "run rebuild_rollups first",
 )
 # Errors that a corrected query fixes: a field or argument the schema does not have, or a catalog argument out of its
-# bounds (pocketdex _validate and the catalog functions); each message says what to change. Not the list-size limits
-# (LIST_LIMIT, TOP_LIMIT): a model "fixes" those by dropping ids or lowering N, and then reports a partial total.
+# bounds (pocketdex _validate and the catalog functions); each message says what to change. Of the list-size limits
+# (LIST_LIMIT, TOP_LIMIT) only an empty list or N below 1: above the maximum a model "fixes" them by dropping ids or
+# lowering N, and then reports a partial total as the full one (final_error_reply ends the run instead).
 FIXABLE_QUERY_ERRORS = (
     "Cannot query field",
     "Unknown argument",
@@ -155,23 +156,34 @@ def final_error_reply(error: str | None) -> str | None:
             "report for this range yet. Try again later."
         )
     match = LIST_LIMIT.search(error)
-    if match:
-        name, limit, count = match.group(1), int(match.group(2)), int(match.group(3))
-        if count == 0:
-            return f"The question needs at least one of the {name} to look up."
+    if match and int(match.group(3)) > int(match.group(2)):
+        name, limit, count = match.group(1), match.group(2), match.group(3)
         return (
             f"Too many {name}: {count}, the limit is {limit} per question. Split the question into groups of at most "
             f"{limit} and add the results."
         )
     match = TOP_LIMIT.search(error)
-    if match:
+    if match and int(match.group(2)) > int(match.group(1)):
         return f"At most the top {match.group(1)} services can be ranked per question (asked for {match.group(2)})."
     return None
 
 
+def _is_fixable_limit_error(error: str) -> bool:
+    """An empty list or a top_by_settled below 1: a corrected query adds what is missing, it drops nothing."""
+    match = LIST_LIMIT.search(error)
+    if match and int(match.group(3)) < 1:
+        return True
+    match = TOP_LIMIT.search(error)
+    return bool(match) and int(match.group(2)) < 1
+
+
 def is_fixable_query_error(error: str | None) -> bool:
     """True when the API refused the query itself, so that a corrected query may succeed."""
-    return bool(error) and not is_coverage_error(error) and any(marker in error for marker in FIXABLE_QUERY_ERRORS)
+    return (
+        bool(error)
+        and not is_coverage_error(error)
+        and (any(marker in error for marker in FIXABLE_QUERY_ERRORS) or _is_fixable_limit_error(error))
+    )
 
 
 # Rules shared by the settlement catalog functions (get...Json, moneyCoverageJson), which read precomputed
