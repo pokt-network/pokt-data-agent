@@ -43,10 +43,9 @@ class QuerySubAgentStateDict(TypedDict):
     endpoint_method: str
     # Raw result from the API/RPC execution – populated by execute_query node.
     query_result: Optional[Any]
+    # The error of the most recent attempt that reached execution. Build and validation do not reset it, so an attempt
+    # that fails before executing leaves the last execution error in place.
     execution_error: Optional[str]
-    # The first execution error that has a final answer for the user (final_error_reply), kept across attempts so that
-    # a later attempt failing at validation or at the LLM does not hide it.
-    final_error: Optional[str]
 
 
 class QueryBuilderSubAgent(ABC):
@@ -536,8 +535,6 @@ Return ONLY the JSON object, no extra text or markdown."""
 
         logger.error("[%s] %s execution failed: %s", self.name, endpoint_type.upper(), error_msg)
         update = {"execution_error": error_msg}
-        if not state.get("final_error") and final_error_reply(error_msg):
-            update["final_error"] = error_msg
         if endpoint_type == "graphql" and is_fixable_query_error(error_msg):
             # The API rejected the query itself (unknown field, argument out of bounds): build it again with the error
             # as the hint. Timeouts, server errors and coverage errors end the run: a new query would not fix them.
@@ -567,7 +564,6 @@ Return ONLY the JSON object, no extra text or markdown."""
             "endpoint_type": "",
             "query_result": None,
             "execution_error": None,
-            "final_error": None,
         }
 
         final_state = self.graph.invoke(initial_state)
@@ -576,7 +572,7 @@ Return ONLY the JSON object, no extra text or markdown."""
         endpoint_method = final_state.get("endpoint_method")
 
         # Query build/validation failed – agent-level refusal
-        if final_state.get("explanation") and not final_state.get("final_error"):
+        if final_state.get("explanation") and not final_error_reply(final_state.get("execution_error")):
             logger.warning(
                 "[%s] graph: agent refusal – %s",
                 self.name,
@@ -592,11 +588,11 @@ Return ONLY the JSON object, no extra text or markdown."""
 
         # Query build/validation failed – hard error
         if not final_state["success"]:
+            # The most recent execution error says more than a later attempt that failed before executing.
             error = (
-                final_state.get("final_error")
+                final_state.get("execution_error")
                 or final_state.get("llm_error")
                 or final_state.get("validation_error")
-                or final_state.get("execution_error")
                 or "Unknown error"
             )
             logger.error(
@@ -615,7 +611,7 @@ Return ONLY the JSON object, no extra text or markdown."""
 
         # Execution failed
         if final_state.get("execution_error"):
-            error_msg = final_state.get("final_error") or final_state["execution_error"]
+            error_msg = final_state["execution_error"]
             logger.error("[%s] execution failed: %s", self.name, error_msg)
             return SubAgentResult(
                 query=final_state["query"],

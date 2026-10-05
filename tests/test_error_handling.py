@@ -171,6 +171,34 @@ class TestMainAgentCoverage(unittest.TestCase):
             agent._format_refusal(state)["agent_notes"], "The question needs at least one of the addresses to look up."
         )
 
+    def test_the_most_recent_execution_error_wins(self):
+        # Attempt 1 sends an empty list; attempt 2 adds the address and asks for a range not covered yet.
+        def envelope(query):
+            return mock.MagicMock(
+                tool_calls=[],
+                content=json.dumps({"endpoint_type": "graphql", "endpoint_method": "getIncomeJson", "query": query}),
+            )
+
+        llm = mock.MagicMock()
+        llm.bind_tools.return_value.invoke.side_effect = [
+            envelope('{ getIncomeJson(addresses: [], rangeStart: "2025-07-01T00:00:00Z") }'),
+            envelope('{ getIncomeJson(addresses: ["pokt1x"], rangeStart: "2025-07-01T00:00:00Z") }'),
+        ]
+        sub_agent = SettlementRewardsAgent(llm)
+        sub_agent.graphql_client = mock.MagicMock()
+        sub_agent.graphql_client.execute_query.side_effect = [
+            (False, None, "GraphQL errors: addresses must have between 1 and 200 elements (has 0)"),
+            (False, None, COVERAGE),
+        ]
+
+        agent = PocketNetworkAgent.__new__(PocketNetworkAgent)
+        agent.llm = mock.MagicMock()
+        agent.sub_agents = [sub_agent]
+        state = {"user_query": "what did pokt1x earn in July 2025?", "selected_subagent": sub_agent, "agent_notes": ""}
+        state.update(agent._build_query(state))
+        self.assertEqual(sub_agent.graphql_client.execute_query.call_count, 2)
+        self.assertEqual(agent._format_refusal(state)["agent_notes"], final_error_reply(COVERAGE))
+
     def test_list_limit_is_reported_without_a_retry(self):
         agent = PocketNetworkAgent.__new__(PocketNetworkAgent)
         agent.llm = mock.MagicMock()
