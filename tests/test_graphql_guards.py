@@ -53,6 +53,9 @@ class TestQueryGuards(unittest.TestCase):
         for query in (
             "{ ...F } fragment F on Query { ...F }",
             "{ ...F } fragment F on Query { ...G } fragment G on Query { ...F }",
+            # through a nested field (the code-review case)
+            '{ supplier(id:"x") { ...F } } fragment F on Supplier { id serviceConfigs(first: 1) '
+            "{ nodes { supplier { ...F } } } }",
         ):
             with self.subTest(query=query):
                 with self.assertRaises(GraphQLError):
@@ -87,6 +90,17 @@ class TestExecuteGraphqlTool(unittest.TestCase):
     @mock.patch("src.tools_data.PocketNetworkAPIClient")
     def test_self_spreading_fragment_is_not_sent(self, client):
         success, result, error = execute_graphql.func(query="{ ...F } fragment F on Query { ...F }")
+        self.assertEqual((success, result), (False, None))
+        self.assertIn("within itself", error)
+        client.return_value.execute_query.assert_not_called()
+
+    @mock.patch("src.tools_data.PocketNetworkAPIClient")
+    def test_fragment_reaching_itself_through_a_field_is_not_sent(self, client):
+        query = (
+            '{ supplier(id:"x") { ...F } } fragment F on Supplier { id serviceConfigs(first: 1) '
+            "{ nodes { supplier { ...F } } } }"
+        )
+        success, result, error = execute_graphql.func(query=query)
         self.assertEqual((success, result), (False, None))
         self.assertIn("within itself", error)
         client.return_value.execute_query.assert_not_called()

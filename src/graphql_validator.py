@@ -34,17 +34,19 @@ def _child_fields(
     fragments: Dict[str, FragmentDefinitionNode],
     path: Tuple[str, ...] = (),
     seen: Optional[Set[str]] = None,
-) -> List[FieldNode]:
-    """Fields selected directly in a selection set, looking through inline and named fragments.
+) -> List[Tuple[FieldNode, Tuple[str, ...]]]:
+    """Fields selected directly in a selection set, looking through inline and named fragments, each with the
+    fragments expanded to reach it.
 
-    path holds the fragments being expanded, to refuse a fragment that spreads itself (the API would refuse it too);
-    seen holds those already expanded in this selection set, whose fields a second spread would only repeat.
+    path holds the fragments being expanded on the way down from the operation, through nested fields too, to refuse
+    a fragment that reaches itself (the API would refuse it too); seen holds those already expanded in this selection
+    set, whose fields a second spread would only repeat.
     """
     seen = set() if seen is None else seen
     fields = []
     for selection in selection_set.selections:
         if isinstance(selection, FieldNode):
-            fields.append(selection)
+            fields.append((selection, path))
         elif isinstance(selection, InlineFragmentNode):
             fields.extend(_child_fields(selection.selection_set, fragments, path, seen))
         elif isinstance(selection, FragmentSpreadNode) and selection.name.value in fragments:
@@ -58,15 +60,17 @@ def _child_fields(
     return fields
 
 
-def _check_field(field: FieldNode, fragments: Dict[str, FragmentDefinitionNode]) -> Optional[str]:
+def _check_field(
+    field: FieldNode, fragments: Dict[str, FragmentDefinitionNode], path: Tuple[str, ...]
+) -> Optional[str]:
     name = field.name.value
     if name.startswith(RAW_FIELD_PREFIXES):
         return f'"{name}" reads a raw payout table and is not allowed: {RAW_FIELD_HINT}.'
     if field.selection_set is None:
         return None
 
-    children = _child_fields(field.selection_set, fragments)
-    if any(child.name.value in ("nodes", "edges") for child in children):
+    children = _child_fields(field.selection_set, fragments, path)
+    if any(child.name.value in ("nodes", "edges") for child, _ in children):
         first = next((arg.value for arg in field.arguments if arg.name.value == "first"), None)
         if not isinstance(first, IntValueNode) or not 0 < int(first.value) <= MAX_FIRST:
             return (
@@ -74,8 +78,8 @@ def _check_field(field: FieldNode, fragments: Dict[str, FragmentDefinitionNode])
                 "for larger answers use totalCount/aggregates, paginate with offset, or the matching ...Json function."
             )
 
-    for child in children:
-        error = _check_field(child, fragments)
+    for child, child_path in children:
+        error = _check_field(child, fragments, child_path)
         if error:
             return error
     return None
@@ -84,13 +88,13 @@ def _check_field(field: FieldNode, fragments: Dict[str, FragmentDefinitionNode])
 def check_query_guards(document: DocumentNode) -> Optional[str]:
     """Return why an LLM-generated query must not be sent, or None when it may be.
 
-    Raises GraphQLError for a fragment that spreads itself.
+    Raises GraphQLError for a fragment that reaches itself, directly or through nested fields.
     """
     fragments = {d.name.value: d for d in document.definitions if isinstance(d, FragmentDefinitionNode)}
     for definition in document.definitions:
         if isinstance(definition, OperationDefinitionNode):
-            for field in _child_fields(definition.selection_set, fragments):
-                error = _check_field(field, fragments)
+            for field, path in _child_fields(definition.selection_set, fragments):
+                error = _check_field(field, fragments, path)
                 if error:
                     return f"Query refused: {error}"
     return None

@@ -1,8 +1,9 @@
+import re
 import unittest
 from unittest import mock
 
 from src.agent import PocketNetworkAgent
-from src.graphql_client import is_coverage_error, is_fixable_query_error
+from src.graphql_client import final_error_reply, is_coverage_error, is_fixable_query_error
 from src.query_sub_agents import SettlementRewardsAgent
 
 # Messages returned by https://data.pocket.network/ on 2026-10-05, as PocketNetworkAPIClient formats them.
@@ -16,6 +17,11 @@ BUCKET_CAP = (
     "use day (up to 92 days), week, month or year for longer ones"
 )
 TOO_MANY_IDS = "GraphQL errors: addresses must have between 1 and 200 elements (has 201)"
+TOP_TOO_HIGH = "GraphQL errors: top_by_settled must be between 1 and 200 (is 1000)"
+REBUILD = (
+    "GraphQL errors: settlement heights 10 to 20 were written with rollup version 1 (current 2): "
+    "run rebuild_rollups first"
+)
 SCHEMA = 'GraphQL errors: Cannot query field "getIncome" on type "Query". Did you mean "getIncomeJson"?'
 TIMEOUT = "API request timeout (30s)"
 
@@ -28,10 +34,32 @@ class TestErrorClassification(unittest.TestCase):
                 self.assertFalse(is_fixable_query_error(error))
 
     def test_fixable_errors(self):
-        for error in (BUCKET_CAP, TOO_MANY_IDS, SCHEMA):
+        for error in (BUCKET_CAP, SCHEMA):
             with self.subTest(error=error):
                 self.assertTrue(is_fixable_query_error(error))
                 self.assertFalse(is_coverage_error(error))
+
+    def test_list_limits_are_not_fixable(self):
+        # A model "fixes" them by dropping ids or lowering N, then reports a partial total as the full one.
+        for error in (TOO_MANY_IDS, TOP_TOO_HIGH):
+            with self.subTest(error=error):
+                self.assertFalse(is_fixable_query_error(error))
+
+    def test_final_replies(self):
+        self.assertIn("not indexed yet", final_error_reply(COVERAGE))
+        self.assertIn("Try a more recent range", final_error_reply(COVERAGE))
+        self.assertIn("(a gap)", final_error_reply(GAP))
+        self.assertIn("being rebuilt", final_error_reply(REBUILD))
+        self.assertIn("Too many addresses: 201, the limit is 200 per question", final_error_reply(TOO_MANY_IDS))
+        self.assertIn("top 200 services", final_error_reply(TOP_TOO_HIGH))
+        for error in (BUCKET_CAP, SCHEMA, TIMEOUT, None):
+            with self.subTest(error=error):
+                self.assertIsNone(final_error_reply(error))
+
+    def test_coverage_replies_never_say_zero(self):
+        for error in (COVERAGE, GAP, REBUILD):
+            with self.subTest(error=error):
+                self.assertIsNone(re.search(r"\b0\b|zero", final_error_reply(error).split("Details:")[0]))
 
     def test_other_errors_are_neither(self):
         for error in (TIMEOUT, "HTTP error: 502 - Bad Gateway", None, ""):
@@ -58,8 +86,8 @@ class TestSubAgentRetries(unittest.TestCase):
                 self.assertEqual(decision, "retry")
                 self.assertIn(error, self.agent._build_user_message({**state, "user_query": "q"}, attempt=2))
 
-    def test_coverage_and_transport_errors_end_the_run(self):
-        for error in (COVERAGE, TIMEOUT):
+    def test_coverage_limit_and_transport_errors_end_the_run(self):
+        for error in (COVERAGE, TOO_MANY_IDS, TOP_TOO_HIGH, TIMEOUT):
             with self.subTest(error=error):
                 self.assertEqual(self._after_execution(error)[0], "done")
 
@@ -76,8 +104,15 @@ class TestMainAgentCoverage(unittest.TestCase):
         agent.llm = mock.MagicMock()
         agent.sub_agents = []
         notes = agent._format_refusal({"user_query": "income in July 2025", "error": COVERAGE})["agent_notes"]
-        self.assertTrue(notes.startswith("Not covered yet"))
-        self.assertIn("not 0", notes)
+        self.assertEqual(notes, final_error_reply(COVERAGE))
+        agent.llm.invoke.assert_not_called()
+
+    def test_list_limit_is_reported_without_a_retry(self):
+        agent = PocketNetworkAgent.__new__(PocketNetworkAgent)
+        agent.llm = mock.MagicMock()
+        agent.sub_agents = []
+        notes = agent._format_refusal({"user_query": "income of 201 addresses", "error": TOO_MANY_IDS})["agent_notes"]
+        self.assertIn("split the question".lower(), notes.lower())
         agent.llm.invoke.assert_not_called()
 
 

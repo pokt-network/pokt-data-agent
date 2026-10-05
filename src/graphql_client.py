@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from typing import Any, Tuple
 
 import requests
@@ -103,7 +104,8 @@ COVERAGE_ERRORS = (
     "run rebuild_rollups first",
 )
 # Errors that a corrected query fixes: a field or argument the schema does not have, or a catalog argument out of its
-# bounds (pocketdex _validate and the catalog functions); each message says what to change.
+# bounds (pocketdex _validate and the catalog functions); each message says what to change. Not the list-size limits
+# (LIST_LIMIT, TOP_LIMIT): a model "fixes" those by dropping ids or lowering N, and then reports a partial total.
 FIXABLE_QUERY_ERRORS = (
     "Cannot query field",
     "Unknown argument",
@@ -113,19 +115,58 @@ FIXABLE_QUERY_ERRORS = (
     "must have a selection of subfields",
     "must not have a selection",
     "Expected value of type",
-    "must have between 1 and",
     "invalid bucket",
     "allows ranges up to",
     "range_start must be earlier than range_end",
     "pass suppliers or owners",
     "pass services, top_by_settled",
-    "top_by_settled must be between",
 )
 
 
 def is_coverage_error(error: str | None) -> bool:
     """True when the API refused a range the settlement tables do not cover yet."""
     return bool(error) and any(marker in error for marker in COVERAGE_ERRORS)
+
+
+LIST_LIMIT = re.compile(r"(\w+) must have between 1 and (\d+) elements \(has (\d+)\)")
+TOP_LIMIT = re.compile(r"top_by_settled must be between 1 and (\d+) \(is (-?\d+)\)")
+
+
+def final_error_reply(error: str | None) -> str | None:
+    """What to tell the user for an error that no other query fixes, or None for any other error.
+
+    A range the settlement tables do not cover has no number to report: the reply must never present it as zero.
+    """
+    if not error:
+        return None
+    if "before the first written settlement" in error or "no settlement height is written yet" in error:
+        return (
+            "Not covered yet: the settlement data for this range is not indexed yet, so there is no number to report "
+            f"for it. Try a more recent range. Details: {error}"
+        )
+    if "which are not written (settlement_gaps)" in error:
+        return (
+            "Not covered yet: this range overlaps settlement heights that are not written yet (a gap), so there is no "
+            f"number to report for it. Try a range outside the gap, or again later. Details: {error}"
+        )
+    if "run rebuild_rollups first" in error:
+        return (
+            "Not available right now: the settlement summary tables are being rebuilt, so there is no number to "
+            "report for this range yet. Try again later."
+        )
+    match = LIST_LIMIT.search(error)
+    if match:
+        name, limit, count = match.group(1), int(match.group(2)), int(match.group(3))
+        if count == 0:
+            return f"The question needs at least one of the {name} to look up."
+        return (
+            f"Too many {name}: {count}, the limit is {limit} per question. Split the question into groups of at most "
+            f"{limit} and add the results."
+        )
+    match = TOP_LIMIT.search(error)
+    if match:
+        return f"At most the top {match.group(1)} services can be ranked per question (asked for {match.group(2)})."
+    return None
 
 
 def is_fixable_query_error(error: str | None) -> bool:
