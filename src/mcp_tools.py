@@ -178,6 +178,7 @@ SUB_AGENT_TOOL_PREFIX = "subagent_"
 MCP_TOOL_APPENDIX = """
 
 The returned token (POKT) values are denominated in uPOKT unless it is stated otherwise.
+An error saying that settlement heights are not written means the data for that range is not indexed yet: report it as not covered yet, never as 0.
 Prefer making multiple simple and well defined queries vs making a big and complex one. Passing specific dates and terminology is advised.
 
 The tool only executes the most relavant GRAPHQL/RCP query related to the natrual language query provided, is up to the user to interpret results which are raw data responses.

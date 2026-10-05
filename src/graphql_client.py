@@ -51,7 +51,10 @@ class PocketNetworkAPIClient:
 
             # Check for GraphQL errors
             if "errors" in data and data["errors"]:
-                error_msg = "GraphQL errors: " + "; ".join([str(err) for err in data["errors"]])
+                # Only the message: the API adds a stack trace and the internal SQL in "extensions".
+                error_msg = "GraphQL errors: " + "; ".join(
+                    [err.get("message", str(err)) if isinstance(err, dict) else str(err) for err in data["errors"]]
+                )
                 return False, None, error_msg
 
             if "data" in data:
@@ -75,6 +78,45 @@ class PocketNetworkAPIClient:
             return False, None, f"Invalid JSON response from API: {str(e)}"
         except Exception as e:
             return False, None, f"Unexpected error: {str(e)}"
+
+
+# Errors of the settlement functions for a range their tables do not cover (pocketdex _check_coverage). The answer is
+# "not covered yet": another query cannot fix it.
+COVERAGE_ERRORS = (
+    "no settlement height is written yet",
+    "before the first written settlement",
+    "which are not written (settlement_gaps)",
+    "run rebuild_rollups first",
+)
+# Errors that a corrected query fixes: a field or argument the schema does not have, or a catalog argument out of its
+# bounds (pocketdex _validate and the catalog functions); each message says what to change.
+FIXABLE_QUERY_ERRORS = (
+    "Cannot query field",
+    "Unknown argument",
+    "Unknown type",
+    "is not defined by type",
+    "of required type",
+    "must have a selection of subfields",
+    "must not have a selection",
+    "Expected value of type",
+    "must have between 1 and",
+    "invalid bucket",
+    "allows ranges up to",
+    "range_start must be earlier than range_end",
+    "pass suppliers or owners",
+    "pass services, top_by_settled",
+    "top_by_settled must be between",
+)
+
+
+def is_coverage_error(error: str | None) -> bool:
+    """True when the API refused a range the settlement tables do not cover yet."""
+    return bool(error) and any(marker in error for marker in COVERAGE_ERRORS)
+
+
+def is_fixable_query_error(error: str | None) -> bool:
+    """True when the API refused the query itself, so that a corrected query may succeed."""
+    return bool(error) and not is_coverage_error(error) and any(marker in error for marker in FIXABLE_QUERY_ERRORS)
 
 
 # Rules shared by the settlement catalog functions (get...Json, moneyCoverageJson), which read precomputed

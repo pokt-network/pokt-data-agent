@@ -11,7 +11,12 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
-from src.graphql_client import GRAPHQL_REGISTRY, POCKET_NETWORK_DATA_ENDPOINT, PocketNetworkAPIClient
+from src.graphql_client import (
+    GRAPHQL_REGISTRY,
+    POCKET_NETWORK_DATA_ENDPOINT,
+    PocketNetworkAPIClient,
+    is_fixable_query_error,
+)
 from src.graphql_validator import validate_graphql_query
 from src.models import QueryFieldInfo, SubAgentResult
 from src.rpc_client import POCKET_NETWORK_RPC_ENDPOINT, RPC_METHODS, PocketNetworkRPCClient
@@ -526,6 +531,10 @@ Return ONLY the JSON object, no extra text or markdown."""
             }
 
         logger.error("[%s] %s execution failed: %s", self.name, endpoint_type.upper(), error_msg)
+        if endpoint_type == "graphql" and is_fixable_query_error(error_msg):
+            # The API rejected the query itself (unknown field, argument out of bounds): build it again with the error
+            # as the hint. Timeouts, server errors and coverage errors end the run: a new query would not fix them.
+            return {"execution_error": error_msg, "success": False}
         return {"execution_error": error_msg}
 
     # ------------------------------------------------------------------
@@ -575,7 +584,12 @@ Return ONLY the JSON object, no extra text or markdown."""
 
         # Query build/validation failed – hard error
         if not final_state["success"]:
-            error = final_state.get("llm_error") or final_state.get("validation_error") or "Unknown error"
+            error = (
+                final_state.get("llm_error")
+                or final_state.get("validation_error")
+                or final_state.get("execution_error")
+                or "Unknown error"
+            )
             logger.error(
                 "[%s] graph failed after %d attempts: %s",
                 self.name,
