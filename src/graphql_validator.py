@@ -1,12 +1,13 @@
 """GraphQL query validation."""
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from graphql import (
     DocumentNode,
     FieldNode,
     FragmentDefinitionNode,
     FragmentSpreadNode,
+    GraphQLError,
     InlineFragmentNode,
     IntValueNode,
     OperationDefinitionNode,
@@ -28,16 +29,32 @@ RAW_FIELD_HINT = (
 MAX_FIRST = 1000
 
 
-def _child_fields(selection_set: SelectionSetNode, fragments: Dict[str, FragmentDefinitionNode]) -> List[FieldNode]:
-    """Fields selected directly in a selection set, looking through inline and named fragments."""
+def _child_fields(
+    selection_set: SelectionSetNode,
+    fragments: Dict[str, FragmentDefinitionNode],
+    path: Tuple[str, ...] = (),
+    seen: Optional[Set[str]] = None,
+) -> List[FieldNode]:
+    """Fields selected directly in a selection set, looking through inline and named fragments.
+
+    path holds the fragments being expanded, to refuse a fragment that spreads itself (the API would refuse it too);
+    seen holds those already expanded in this selection set, whose fields a second spread would only repeat.
+    """
+    seen = set() if seen is None else seen
     fields = []
     for selection in selection_set.selections:
         if isinstance(selection, FieldNode):
             fields.append(selection)
         elif isinstance(selection, InlineFragmentNode):
-            fields.extend(_child_fields(selection.selection_set, fragments))
+            fields.extend(_child_fields(selection.selection_set, fragments, path, seen))
         elif isinstance(selection, FragmentSpreadNode) and selection.name.value in fragments:
-            fields.extend(_child_fields(fragments[selection.name.value].selection_set, fragments))
+            name = selection.name.value
+            if name in path:
+                raise GraphQLError(f'Cannot spread fragment "{name}" within itself.')
+            if name in seen:
+                continue
+            seen.add(name)
+            fields.extend(_child_fields(fragments[name].selection_set, fragments, path + (name,), seen))
     return fields
 
 
@@ -65,7 +82,10 @@ def _check_field(field: FieldNode, fragments: Dict[str, FragmentDefinitionNode])
 
 
 def check_query_guards(document: DocumentNode) -> Optional[str]:
-    """Return why an LLM-generated query must not be sent, or None when it may be."""
+    """Return why an LLM-generated query must not be sent, or None when it may be.
+
+    Raises GraphQLError for a fragment that spreads itself.
+    """
     fragments = {d.name.value: d for d in document.definitions if isinstance(d, FragmentDefinitionNode)}
     for definition in document.definitions:
         if isinstance(definition, OperationDefinitionNode):

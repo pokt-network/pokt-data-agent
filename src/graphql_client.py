@@ -13,6 +13,17 @@ if POCKET_NETWORK_DATA_ENDPOINT is None:
     raise ValueError('The "POCKET_NETWORK_DATA_ENDPOINT" enviroment variable is not set.')
 
 
+# Longest raw (non-GraphQL) error body passed on, in characters.
+MAX_RAW_ERROR_CHARS = 2000
+
+
+def _graphql_errors(errors: list) -> str:
+    """The messages of a GraphQL "errors" list: the API adds a stack trace and the internal SQL in "extensions"."""
+    return "GraphQL errors: " + "; ".join(
+        [err.get("message", str(err)) if isinstance(err, dict) else str(err) for err in errors]
+    )
+
+
 class PocketNetworkAPIClient:
     """Client for querying the Pocket Network GraphQL API."""
 
@@ -51,11 +62,7 @@ class PocketNetworkAPIClient:
 
             # Check for GraphQL errors
             if "errors" in data and data["errors"]:
-                # Only the message: the API adds a stack trace and the internal SQL in "extensions".
-                error_msg = "GraphQL errors: " + "; ".join(
-                    [err.get("message", str(err)) if isinstance(err, dict) else str(err) for err in data["errors"]]
-                )
-                return False, None, error_msg
+                return False, None, _graphql_errors(data["errors"])
 
             if "data" in data:
                 return True, data["data"], None
@@ -67,10 +74,17 @@ class PocketNetworkAPIClient:
         except requests.exceptions.ConnectionError:
             return False, None, "Connection error to API. Please check the endpoint."
         except requests.exceptions.HTTPError as e:
+            # A query the API cannot validate comes back as HTTP 400 with a GraphQL {"errors": [...]} body.
+            try:
+                body = e.response.json()
+            except ValueError:
+                body = None
+            if isinstance(body, dict) and body.get("errors"):
+                return False, None, _graphql_errors(body["errors"])
             return (
                 False,
                 None,
-                f"HTTP error: {e.response.status_code} - {e.response.text}",
+                f"HTTP error: {e.response.status_code} - {e.response.text[:MAX_RAW_ERROR_CHARS]}",
             )
         except requests.exceptions.RequestException as e:
             return False, None, f"Request error: {str(e)}"

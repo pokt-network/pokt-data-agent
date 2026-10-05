@@ -1,7 +1,7 @@
 import unittest
 from unittest import mock
 
-from graphql import parse
+from graphql import GraphQLError, parse
 
 from src.graphql_client import GRAPHQL_REGISTRY
 from src.graphql_validator import MAX_FIRST, check_query_guards, validate_graphql_query
@@ -49,6 +49,21 @@ class TestQueryGuards(unittest.TestCase):
             with self.subTest(query=query):
                 self.assertIsNone(guard(query))
 
+    def test_self_spreading_fragment_is_refused(self):
+        for query in (
+            "{ ...F } fragment F on Query { ...F }",
+            "{ ...F } fragment F on Query { ...G } fragment G on Query { ...F }",
+        ):
+            with self.subTest(query=query):
+                with self.assertRaises(GraphQLError):
+                    guard(query)
+        ok, _, error = validate_graphql_query("{ ...F } fragment F on Query { ...F }", "suppliers")
+        self.assertFalse(ok)
+        self.assertIn("within itself", error)
+
+    def test_a_fragment_spread_twice_is_not_a_cycle(self):
+        self.assertIsNone(guard('{ ...F ...F } fragment F on Query { block(id: "1") { id } }'))
+
     def test_every_registry_example_passes(self):
         for name, info in GRAPHQL_REGISTRY.items():
             for example in info.examples:
@@ -67,6 +82,13 @@ class TestExecuteGraphqlTool(unittest.TestCase):
         success, result, error = execute_graphql.func(query="{ modToAcctTransfers(first: 5) { nodes { id } } }")
         self.assertEqual((success, result), (False, None))
         self.assertIn("raw payout table", error)
+        client.return_value.execute_query.assert_not_called()
+
+    @mock.patch("src.tools_data.PocketNetworkAPIClient")
+    def test_self_spreading_fragment_is_not_sent(self, client):
+        success, result, error = execute_graphql.func(query="{ ...F } fragment F on Query { ...F }")
+        self.assertEqual((success, result), (False, None))
+        self.assertIn("within itself", error)
         client.return_value.execute_query.assert_not_called()
 
     @mock.patch("src.tools_data.PocketNetworkAPIClient")
