@@ -216,7 +216,7 @@ GRAPHQL_REGISTRY = {
             "# Latest values of specific params in a namespace\n"
             'query { params(filter: {namespace: {equalTo: "shared"}, key: {in: ["claim_window_open_offset_blocks", '
             '"claim_window_close_offset_blocks", "proof_window_close_offset_blocks"]}}, orderBy: [BLOCK_ID_DESC], '
-            "distinct: [NAMESPACE, KEY]) { nodes { key value blockId } } }",
+            "distinct: [NAMESPACE, KEY], first: 100) { nodes { key value blockId } } }",
         ],
     ),
     "blocks": QueryFieldInfo(
@@ -231,7 +231,7 @@ GRAPHQL_REGISTRY = {
             "# Latest block with network-wide snapshot fields (staked actors, supply, relays)\n"
             "query { blocks(orderBy: ID_DESC, first: 1) { nodes { height: id hash timestamp totalTxs totalRelays "
             "totalComputedUnits stakedValidators stakedSuppliers stakedSuppliersTokens stakedApps stakedAppsTokens "
-            "stakedGateways timeToBlock size supplies { nodes { supply { denom amount } } } } } }",
+            "stakedGateways timeToBlock size supplies(first: 10) { nodes { supply { denom amount } } } } } }",
             "# Network totals and averages over a time window (aggregates over blocks)\n"
             'query { blocks(filter: {timestamp: {greaterThanOrEqualTo: "2026-06-10T00:00:00Z", '
             'lessThanOrEqualTo: "2026-06-11T00:00:00Z"}}) { aggregates { sum { totalRelays totalEstimatedRelays '
@@ -266,7 +266,7 @@ GRAPHQL_REGISTRY = {
             "relayMiningDifficultyUpdatedEvents(orderBy: BLOCK_ID_DESC, first: 1) { nodes { newNumRelaysEma } } } } }",
             "# Fuzzy search services by id or name\n"
             'query { services(filter: {or: [{id: {includesInsensitive: "eth"}}, '
-            '{name: {includesInsensitive: "eth"}}]}) { nodes { id name } } }',
+            '{name: {includesInsensitive: "eth"}}]}, first: 20) { nodes { id name } } }',
         ],
     ),
     "suppliers": QueryFieldInfo(
@@ -524,7 +524,7 @@ GRAPHQL_REGISTRY = {
         },
         examples=[
             "# Single account with balances and last activity (singular point lookup)\n"
-            'query { account(id: "pokt1...") { id balances { nodes { amount denom '
+            'query { account(id: "pokt1...") { id balances(first: 10) { nodes { amount denom '
             "lastUpdatedBlock { height: id timestamp } } } } }",
         ],
     ),
@@ -544,7 +544,7 @@ GRAPHQL_REGISTRY = {
             "aggregates { sum { stakeAmount } } } }",
             "# Application detail by address (singular point lookup)\n"
             'query { application(id: "pokt1...") { id stakeAmount stakeStatus unstakingEndHeight '
-            "applicationServices { nodes { serviceId } } applicationGateways { totalCount nodes { gatewayId } } } }",
+            "applicationServices(first: 100) { nodes { serviceId } } applicationGateways(first: 100) { totalCount nodes { gatewayId } } } }",
         ],
     ),
     "gateways": QueryFieldInfo(
@@ -678,7 +678,7 @@ GRAPHQL_REGISTRY = {
         },
         examples=[
             "# All service configs of a supplier (cursor-paginated), with rev-share and endpoints\n"
-            'query { supplierServiceConfigs(filter: {supplierId: {equalTo: "pokt1..."}}) '
+            'query { supplierServiceConfigs(filter: {supplierId: {equalTo: "pokt1..."}}, first: 100) '
             "{ pageInfo { hasNextPage endCursor } nodes { serviceId revShare endpoints activatedAtId } } }",
         ],
     ),
@@ -687,7 +687,7 @@ GRAPHQL_REGISTRY = {
         description="Queries application-gateway delegation pairs. Filter by applicationId to see which gateways an application delegated to, or by gatewayId to list the applications delegating to a gateway.",
         examples=[
             "# Gateways an application has delegated to\n"
-            'query { applicationGateways(filter: {applicationId: {equalTo: "pokt1..."}}) '
+            'query { applicationGateways(filter: {applicationId: {equalTo: "pokt1..."}}, first: 100) '
             "{ nodes { gateway { id stakeAmount stakeDenom } } } }",
         ],
     ),

@@ -1,9 +1,11 @@
 """LangChain data tools for pocket network data (general)."""
 
+import json
 import logging
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional, Tuple
 
+from graphql import GraphQLError, parse
 from langchain_core.tools import tool
 
 from src.graphql_client import (
@@ -11,6 +13,7 @@ from src.graphql_client import (
     POCKET_NETWORK_DATA_ENDPOINT,
     PocketNetworkAPIClient,
 )
+from src.graphql_validator import MAX_FIRST, check_query_guards
 from src.query_sub_agents import ALL_SUBAGENTS
 from src.rpc_client import (
     POCKET_NETWORK_RPC_ENDPOINT,
@@ -166,10 +169,21 @@ def get_method_examples(method_name: str, protocol: str) -> List[str]:
 # ---------------------------- EXECUTION TOOLS ---------------------------------
 ################################################################################
 
-EXECUTE_GRAPHQL_DESCRIPTION = """Executes a GraphQL method call and returns the result ("data" field) along with a sucess flag and an error string if not success.
+# Longest result handed back to the calling LLM, in characters of JSON.
+MAX_RESULT_CHARS = 100_000
+
+EXECUTE_GRAPHQL_DESCRIPTION = f"""Executes a GraphQL method call and returns the result ("data" field) along with a sucess flag and an error string if not success.
+
+Guards, checked before the query is sent:
+- Raw payout tables (modToAcctTransfers...) are refused: use the settlement catalog (getIncomeJson, ...).
+- Every connection that selects "nodes" or "edges" needs a literal "first" between 1 and {MAX_FIRST}.
+A result longer than {MAX_RESULT_CHARS} characters is cut, and the error string says so.
+
+The settlement catalog and legacy... functions raise an error for a range their data does not cover yet: report
+that range as "not covered yet", never as 0.
 
 Args:
-    query: GraphQL query string to be wrapped into "{"query": query}" and posted to the endpoint.
+    query: GraphQL query string to be wrapped into "{{"query": query}}" and posted to the endpoint.
 
 Returns:
     Tuple of (success, result, error_message)
@@ -179,8 +193,24 @@ EXECUTE_GRAPHQL_NAME = "data_execute_graphql"
 
 @tool(EXECUTE_GRAPHQL_NAME, description=EXECUTE_GRAPHQL_DESCRIPTION)
 def execute_graphql(query: str) -> Tuple[bool, Any, str | None]:
-    # Execute (this is just a wrapper)
-    return PocketNetworkAPIClient().execute_query(query)
+    try:
+        guard_error = check_query_guards(parse(query))
+    except GraphQLError as e:
+        return False, None, f"GraphQL validation error: {e}"
+    if guard_error:
+        return False, None, guard_error
+
+    success, result, error = PocketNetworkAPIClient().execute_query(query)
+    if success:
+        text = json.dumps(result)
+        if len(text) > MAX_RESULT_CHARS:
+            return (
+                True,
+                text[:MAX_RESULT_CHARS],
+                f"Result truncated to {MAX_RESULT_CHARS} of {len(text)} characters (the JSON is cut): "
+                "narrow the range or the filter, or use a coarser bucket.",
+            )
+    return success, result, error
 
 
 EXECUTE_RPC_DESCRIPTION = """Executes a RPC method call and returns the result (json response) along with a sucess flag and an error string if not success.
