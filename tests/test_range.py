@@ -3,9 +3,12 @@ import re
 import unittest
 from unittest import mock
 
+import requests
+
 from src.agent import PocketNetworkAgent
 from src.graphql_client import (
     NOT_COVERED,
+    PocketNetworkAPIClient,
     final_error_reply,
     is_coverage_error,
     is_fixable_query_error,
@@ -16,8 +19,8 @@ from src.graphql_client import (
 from src.query_sub_agents import SettlementRewardsAgent
 from src.tools_data import MAX_RESULT_CHARS, execute_graphql
 
-# The {range, data} shape, from the examples of the pocketdex contract (times from its test fixture: coverage starts
-# 2026-09-01 12:00, one settlement gap).
+# The {range, data} shape of the pocketdex contract (feat/money-range-in-response, 2e88668), with the times of its
+# test fixture: coverage starts 2026-09-01 12:00, one settlement gap.
 ROW = {
     "bucket_start": "2026-09-01T12:00:00+00:00",
     "bucket_end": "2026-09-03T00:00:00+00:00",
@@ -29,37 +32,16 @@ ROW = {
     "amount_upokt": "201156529",
     "transfer_count": "12",
 }
+GAP = {"from": "2026-09-01T23:30:00+00:00", "to": "2026-09-02T00:00:00+00:00"}
 PARTIAL_WITH_GAP = {
     "range": {
         "requested_from": "2026-08-31T00:00:00+00:00",
         "requested_to": "2026-09-03T00:00:00+00:00",
         "covered_from": "2026-09-01T12:00:00+00:00",
         "covered_to": "2026-09-02T08:20:00+00:00",
-        "gaps": [{"from": "2026-09-01T23:30:00+00:00", "to": "2026-09-02T00:00:00+00:00"}],
+        "gaps": [GAP],
     },
     "data": [ROW],
-}
-# A legacy range that lies inside a settlement gap: nothing to read.
-LEGACY_IN_GAP = {
-    "range": {
-        "requested_from": "2026-09-01T23:40:00+00:00",
-        "requested_to": "2026-09-01T23:50:00+00:00",
-        "covered_from": "2026-09-01T23:40:00+00:00",
-        "covered_to": "2026-09-01T23:50:00+00:00",
-        "gaps": [{"from": "2026-09-01T23:30:00+00:00", "to": "2026-09-02T00:00:00+00:00"}],
-    },
-    "data": None,
-}
-# A catalog range that ends before coverage: no rows.
-CATALOG_BEFORE = {
-    "range": {
-        "requested_from": "2026-08-30T00:00:00+00:00",
-        "requested_to": "2026-08-31T00:00:00+00:00",
-        "covered_from": "2026-09-01T12:00:00+00:00",
-        "covered_to": "2026-08-31T00:00:00+00:00",
-        "gaps": [],
-    },
-    "data": [],
 }
 LEGACY_PARTIAL = {
     "range": {
@@ -71,16 +53,6 @@ LEGACY_PARTIAL = {
     },
     "data": 201156529,
 }
-LEGACY_BEFORE = {
-    "range": {
-        "requested_from": "2026-08-01T00:00:00+00:00",
-        "requested_to": "2026-08-31T00:00:00+00:00",
-        "covered_from": "2026-09-01T12:00:00+00:00",
-        "covered_to": "2026-08-31T00:00:00+00:00",
-        "gaps": [],
-    },
-    "data": None,
-}
 COVERED = {
     "range": {
         "requested_from": "2026-09-02T00:00:00+00:00",
@@ -91,10 +63,59 @@ COVERED = {
     },
     "data": {"reimbursement": 0, "inflation": 123, "mint_burn": 456},
 }
+# Nothing covered: covered_from / covered_to null; data null for legacy, [] for the catalog _json twins.
+NOTHING = {"covered_from": None, "covered_to": None, "gaps": []}
+LEGACY_BEFORE = {
+    "range": {"requested_from": "2026-08-01T00:00:00+00:00", "requested_to": "2026-08-31T00:00:00+00:00", **NOTHING},
+    "data": None,
+}
+CATALOG_BEFORE = {
+    "range": {"requested_from": "2026-08-30T00:00:00+00:00", "requested_to": "2026-08-31T00:00:00+00:00", **NOTHING},
+    "data": [],
+}
+# A range inside the gap: nothing covered, and the gap listed.
+CATALOG_IN_GAP = {
+    "range": {
+        "requested_from": "2026-09-01T23:40:00+00:00",
+        "requested_to": "2026-09-01T23:50:00+00:00",
+        **NOTHING,
+        "gaps": [GAP],
+    },
+    "data": [],
+}
+# The first draft of the contract said "nothing covered" with covered_from after covered_to.
+DRAFT_BEFORE = {
+    "range": {
+        "requested_from": "2026-08-30T00:00:00+00:00",
+        "requested_to": "2026-08-31T00:00:00+00:00",
+        "covered_from": "2026-09-01T12:00:00+00:00",
+        "covered_to": "2026-08-31T00:00:00+00:00",
+        "gaps": [],
+    },
+    "data": [],
+}
+# A legacy date series over a covered range with no rows: data null (json_agg of nothing), yet covered.
+LEGACY_SERIES_EMPTY = {"range": COVERED["range"], "data": None}
+# A legacy range of one instant (requested_to / covered_to are the inclusive end_date).
+LEGACY_INSTANT = {
+    "range": {
+        **COVERED["range"],
+        "requested_to": "2026-09-02T00:00:00+00:00",
+        "covered_to": "2026-09-02T00:00:00+00:00",
+    },
+    "data": COVERED["data"],
+}
 # The bare-JSON shape, as data.pocket.network answers on 2026-10-06.
 OLD_ROWS = [ROW]
 OLD_MINT = {"reimbursement": 726828, "inflation": 726828, "mint_burn": 554224344047}
 OLD_TOTAL = "201156529"
+
+
+def _response(body):
+    response = requests.Response()
+    response.status_code = 200
+    response._content = json.dumps(body).encode()
+    return response
 
 
 class TestUnwrapRange(unittest.TestCase):
@@ -120,7 +141,7 @@ class TestRangeNotes(unittest.TestCase):
         self.assertIn("never 0", notes[2])
 
     def test_nothing_covered_is_never_zero(self):
-        for value in (LEGACY_BEFORE, CATALOG_BEFORE):
+        for value in (LEGACY_BEFORE, CATALOG_BEFORE, DRAFT_BEFORE):
             with self.subTest(value=value):
                 (note,) = range_notes({"total": value})
                 self.assertIn(f"total: {NOT_COVERED}", note)
@@ -129,6 +150,7 @@ class TestRangeNotes(unittest.TestCase):
     def test_a_covered_range_and_the_old_shape_say_nothing(self):
         for result in (
             {"legacyMintBreakdownBetweenDates": COVERED},
+            {"legacyMintBreakdownBetweenDates": LEGACY_INSTANT},
             {"getIncomeJson": OLD_ROWS},
             {"legacyMintBreakdownBetweenDates": OLD_MINT},
             {"legacyRewardsByAddressesAndTime": OLD_TOTAL},
@@ -137,14 +159,21 @@ class TestRangeNotes(unittest.TestCase):
             with self.subTest(result=result):
                 self.assertEqual(range_notes(result), [])
 
-    def test_a_range_with_no_start_says_since_when(self):
-        value = {"range": {**COVERED["range"], "requested_from": None}, "data": COVERED["data"]}
-        (note,) = range_notes({"x": value})
-        self.assertIn("x: data since 2026-09-02T00:00:00+00:00 (requested from None)", note)
+    def test_data_null_over_a_covered_range_is_not_called_uncovered(self):
+        (note,) = range_notes({"series": LEGACY_SERIES_EMPTY})
+        self.assertIn("found nothing in the covered part", note)
+        self.assertNotIn(NOT_COVERED, note)
 
-    def test_a_missing_covered_to_says_nothing_about_the_end(self):
-        value = {"range": {**COVERED["range"], "covered_to": None}, "data": COVERED["data"]}
-        self.assertEqual(range_notes({"x": value}), [])
+    def test_unbounded_bounds_are_said_in_words(self):
+        value = {
+            "range": {**COVERED["range"], "requested_from": None, "requested_to": None},
+            "data": COVERED["data"],
+        }
+        notes = range_notes({"x": value})
+        self.assertIn("x: data since 2026-09-02T00:00:00+00:00 (requested from None)", notes[0])
+        self.assertIn("x: data until 2026-09-02T06:00:00+00:00 (requested to None)", notes[1])
+        gap = {"range": {**NOTHING, "gaps": [{"from": None, "to": "2026-04-01T00:00:00+00:00"}]}, "data": None}
+        self.assertIn("no data from the start of the chain to 2026-04-01T00:00:00+00:00", range_notes({"x": gap})[1])
 
     def test_bounds_without_a_zone_are_utc(self):
         value = {"range": {**COVERED["range"], "requested_from": "2026-09-01T00:00:00"}, "data": COVERED["data"]}
@@ -163,7 +192,7 @@ class TestNotCovered(unittest.TestCase):
         self.assertIsNone(re.search(r"\b0\b|zero", reply.split("Details:")[0]))
 
     def test_nothing_covered_inside_a_gap_gets_the_gap_reply(self):
-        error = not_covered_error({"total": LEGACY_IN_GAP})
+        error = not_covered_error({"total": CATALOG_IN_GAP})
         self.assertIn(NOT_COVERED, error)
         self.assertIn("(a gap)", final_error_reply(error))
 
@@ -172,11 +201,23 @@ class TestNotCovered(unittest.TestCase):
             {"a": LEGACY_BEFORE, "b": LEGACY_PARTIAL},
             {"a": LEGACY_BEFORE, "b": OLD_MINT},
             {"a": PARTIAL_WITH_GAP},
+            {"a": LEGACY_SERIES_EMPTY},
             {"a": OLD_ROWS},
             {"a": None},
         ):
             with self.subTest(result=result):
                 self.assertIsNone(not_covered_error(result))
+
+    @mock.patch("src.graphql_client.requests.post")
+    def test_the_client_fails_an_answer_that_covers_nothing(self, post):
+        post.return_value = _response({"data": {"total": LEGACY_BEFORE}})
+        success, result, error = PocketNetworkAPIClient("http://api").execute_query("{ total: x }")
+        self.assertEqual((success, result), (False, None))
+        self.assertTrue(is_coverage_error(error))
+        post.return_value = _response({"data": {"total": LEGACY_PARTIAL}})
+        self.assertEqual(
+            PocketNetworkAPIClient("http://api").execute_query("{ total: x }"), (True, {"total": LEGACY_PARTIAL}, None)
+        )
 
 
 class TestExecuteGraphqlRange(unittest.TestCase):
@@ -189,9 +230,9 @@ class TestExecuteGraphqlRange(unittest.TestCase):
         self.assertIn("data since 2026-09-01T12:00:00+00:00", note)
         self.assertIn("no data from 2026-09-01T23:30:00+00:00", note)
 
-    @mock.patch("src.tools_data.PocketNetworkAPIClient")
-    def test_nothing_covered_fails_like_the_coverage_error(self, client):
-        client.return_value.execute_query.return_value = (True, {"total": LEGACY_BEFORE}, None)
+    @mock.patch("src.graphql_client.requests.post")
+    def test_nothing_covered_fails_like_the_coverage_error(self, post):
+        post.return_value = _response({"data": {"total": LEGACY_BEFORE}})
         success, returned, error = execute_graphql.func(query="{ total: legacyRewardsByAddressesAndTime }")
         self.assertEqual((success, returned), (False, None))
         self.assertTrue(is_coverage_error(error))
@@ -226,17 +267,17 @@ class TestAgentRange(unittest.TestCase):
             '{ getIncomeJson(addresses: ["pokt1x"], rangeStart: "2026-08-31T00:00:00Z") }'
         )
         sub_agent = SettlementRewardsAgent(llm)
-        sub_agent.graphql_client = mock.MagicMock()
-        sub_agent.graphql_client.execute_query.return_value = (True, result, None)
+        sub_agent.graphql_client = PocketNetworkAPIClient("http://api")
         agent = PocketNetworkAgent.__new__(PocketNetworkAgent)
         agent.llm = mock.MagicMock()
         agent.sub_agents = [sub_agent]
         state = {"user_query": "what did pokt1x earn?", "selected_subagent": sub_agent, "agent_notes": ""}
-        state.update(agent._build_query(state))
-        return agent, sub_agent, state
+        with mock.patch("src.graphql_client.requests.post", return_value=_response({"data": result})) as post:
+            state.update(agent._build_query(state))
+        return agent, post, state
 
     def test_partial_range_reaches_the_answer_notes(self):
-        agent, sub_agent, state = self._run({"getIncomeJson": PARTIAL_WITH_GAP})
+        agent, post, state = self._run({"getIncomeJson": PARTIAL_WITH_GAP})
         self.assertIsNone(state.get("error"))
         self.assertEqual(state["query_result"], {"getIncomeJson": PARTIAL_WITH_GAP})
         self.assertIn("Coverage: getIncomeJson: data since 2026-09-01T12:00:00+00:00", state["agent_notes"])
@@ -244,14 +285,14 @@ class TestAgentRange(unittest.TestCase):
         self.assertIn("Coverage: getIncomeJson: no data from 2026-09-01T23:30:00+00:00", state["agent_notes"])
 
     def test_nothing_covered_ends_as_not_covered_without_a_retry(self):
-        agent, sub_agent, state = self._run({"getIncomeJson": CATALOG_BEFORE})
-        self.assertEqual(sub_agent.graphql_client.execute_query.call_count, 1)
+        agent, post, state = self._run({"getIncomeJson": CATALOG_BEFORE})
+        self.assertEqual(post.call_count, 1)
         self.assertIn(NOT_COVERED, state["error"])
         self.assertTrue(agent._format_refusal(state)["agent_notes"].startswith("Not covered yet"))
         agent.llm.invoke.assert_not_called()
 
     def test_old_shape_adds_no_coverage_note(self):
-        agent, sub_agent, state = self._run({"getIncomeJson": OLD_ROWS})
+        agent, post, state = self._run({"getIncomeJson": OLD_ROWS})
         self.assertIsNone(state.get("error"))
         self.assertNotIn("Coverage:", state["agent_notes"])
 

@@ -67,6 +67,10 @@ class PocketNetworkAPIClient:
                 return False, None, _graphql_errors(data["errors"])
 
             if "data" in data:
+                # A {range, data} answer that covers nothing fails as the API's coverage error did before the range.
+                not_covered = not_covered_error(data["data"])
+                if not_covered:
+                    return False, None, not_covered
                 return True, data["data"], None
             else:
                 return False, None, "No data returned from API"
@@ -206,8 +210,9 @@ def unwrap_range(value: Any) -> Tuple[Any, dict | None]:
     """Split the answer of a settlement function into (data, range).
 
     pocketdex answers either with the bare JSON (and raises for a range it does not cover), or with
-    {"range": {requested_from, requested_to, covered_from, covered_to, gaps}, "data": <the same JSON>}, where data is
-    None when nothing in the range is covered. The JSON arrives parsed; the old BigFloat totals arrive as strings.
+    {"range": {requested_from, requested_to, covered_from, covered_to, gaps}, "data": <the same JSON>}, where
+    covered_from and covered_to are None when nothing in the range is covered (data is then None or []). The JSON
+    arrives parsed; the old BigFloat totals arrive as strings.
     """
     if isinstance(value, dict) and "data" in value and isinstance(value.get("range"), dict):
         return value["data"], value["range"]
@@ -223,9 +228,15 @@ def _time(value: Any) -> datetime | None:
     return parsed.replace(tzinfo=timezone.utc) if parsed and parsed.tzinfo is None else parsed
 
 
-def _covers_nothing(data: Any, range_: dict) -> bool:
+def _covers_nothing(range_: dict) -> bool:
+    """Nothing in the range is covered: the bounds are None (or, from an earlier pocketdex, inverted). data None alone
+    does not say it: a legacy date series over a covered range with no rows is None too."""
     covered_from, covered_to = _time(range_.get("covered_from")), _time(range_.get("covered_to"))
-    return data is None or covered_from is None or (covered_to is not None and covered_from >= covered_to)
+    return covered_from is None or covered_to is None or covered_from > covered_to
+
+
+def _bound(value: Any, unbounded: str) -> str:
+    return unbounded if value is None else str(value)
 
 
 def _ranged_fields(result: Any) -> List[Tuple[str, Any, dict]]:
@@ -244,25 +255,26 @@ def _field_notes(name: str, data: Any, range_: dict) -> List[str]:
     covered_from, requested_from = range_.get("covered_from"), range_.get("requested_from")
     covered_to, requested_to = range_.get("covered_to"), range_.get("requested_to")
     notes = []
-    if _covers_nothing(data, range_):
-        notes.append(
-            f"{name}: {NOT_COVERED} (covered from {covered_from} to {covered_to}), so it has no number to report: "
-            "say not covered yet, never 0."
-        )
+    if _covers_nothing(range_):
+        notes.append(f"{name}: {NOT_COVERED}, so it has no number to report: say not covered yet, never 0.")
     else:
-        # covered_from parses here (_covers_nothing); a NULL requested bound asked for all the data on that side.
+        # Both bounds parse here (_covers_nothing); a NULL requested bound asked for all the data on that side.
         if _time(requested_from) is None or _time(covered_from) > _time(requested_from):
             notes.append(
                 f"{name}: data since {covered_from} (requested from {requested_from}): say so with the result."
             )
-        if _time(covered_to) is not None and (_time(requested_to) is None or _time(covered_to) < _time(requested_to)):
+        if _time(requested_to) is None or _time(covered_to) < _time(requested_to):
             notes.append(
                 f"{name}: data until {covered_to} (requested to {requested_to}): say so with the result; what comes "
                 "after it is not covered yet, never 0."
             )
+        if data is None:
+            notes.append(f"{name}: data null: the function found nothing in the covered part of the range.")
     gaps = range_.get("gaps") or []
     if gaps:
-        spans = ", ".join(f"{gap.get('from')} to {gap.get('to')}" for gap in gaps)
+        spans = ", ".join(
+            f"{_bound(gap.get('from'), 'the start of the chain')} to {_bound(gap.get('to'), 'now')}" for gap in gaps
+        )
         notes.append(
             f"{name}: no data from {spans}: settlement heights which are not written (settlement_gaps), not covered, "
             "never 0."
@@ -278,7 +290,7 @@ def range_notes(result: Any) -> List[str]:
 def not_covered_error(result: Any) -> str | None:
     """The coverage error for a result whose every field is in the {range, data} shape and covers nothing, else None."""
     fields = _ranged_fields(result)
-    if not fields or len(fields) < len(result) or not all(_covers_nothing(data, r) for _, data, r in fields):
+    if not fields or len(fields) < len(result) or not all(_covers_nothing(r) for _, _, r in fields):
         return None
     return "Settlement range: " + " ".join(note for field in fields for note in _field_notes(*field))
 
@@ -290,10 +302,10 @@ COVERAGE_NOTE = (
     "April 2026 as of October 2026; moneyCoverageJson tells). The API answers in one of two shapes. Bare JSON: a "
     "range that starts before the data, or crosses a gap, is an error. Or "
     '{"range": {"requested_from", "requested_to", "covered_from", "covered_to", "gaps": [{"from", "to"}]}, '
-    '"data": <the same JSON>}, answered from the covered part: data null (or covered_from not before covered_to) '
-    'means nothing is covered; a covered_from later than requested_from means the data starts there (say "data '
-    'since <covered_from>"), and a covered_to earlier than requested_to that it ends there; the gaps have no data. A range or gap not covered is "not covered yet", never 0: '
-    "report it so, and do not retry it."
+    '"data": <the same JSON>}, answered from the covered part: covered_from and covered_to null mean nothing is '
+    "covered (data is then null or []); a covered_from later than requested_from means the data starts there (say "
+    '"data since <covered_from>"), and a covered_to earlier than requested_to that it ends there; the gaps have no '
+    'data. A range or gap not covered is "not covered yet", never 0: report it so, and do not retry it.'
 )
 CATALOG_NOTES = {
     "rangeStart/rangeEnd": "The range [start, end) in UTC with an explicit zone, e.g. 2026-10-01T00:00:00Z. Pass both.",

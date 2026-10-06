@@ -17,7 +17,6 @@ from src.graphql_client import (
     PocketNetworkAPIClient,
     final_error_reply,
     is_fixable_query_error,
-    not_covered_error,
     range_notes,
 )
 from src.graphql_validator import validate_graphql_query
@@ -389,7 +388,7 @@ Generate a query that answers the user's question.
 For GraphQL: use one of the given fields with appropriate filters and aggregations (if needed).
 Keep queries simple. Check for pagination. Pass numerical fields in quotes.
 Every connection that selects "nodes" or "edges" needs a "first" between 1 and 1000; for counts and sums use totalCount or aggregates.
-Settlement catalog functions (get...Json, legacy..., moneyCoverageJson) take a [start, end) range in UTC with "Z". Their bucket allows hour up to 7 days, day up to 92 days, week up to 366 days. A range before their coverage is not covered (an error, or a "range" with data null), never 0: do not answer it with another function.
+Settlement catalog functions (get...Json, legacy..., moneyCoverageJson) take a [start, end) range in UTC with "Z". Their bucket allows hour up to 7 days, day up to 92 days, week up to 366 days. A range before their coverage is not covered (an error, or a "range" whose covered_from is null), never 0: do not answer it with another function.
 
 {output_instructions}
 
@@ -527,10 +526,6 @@ Return ONLY the JSON object, no extra text or markdown."""
             success, result, error_msg = self.rpc_client.execute_query(method, params, path_params)
         else:
             success, result, error_msg = self.graphql_client.execute_query(state["query"])
-            # A {range, data} answer that covers nothing is what the API raised before it answered with the range.
-            not_covered = not_covered_error(result) if success else None
-            if not_covered:
-                success, result, error_msg = False, None, not_covered
 
         if success:
             logger.info("[%s] %s query executed successfully.", self.name, endpoint_type.upper())
