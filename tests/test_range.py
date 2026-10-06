@@ -53,7 +53,7 @@ LEGACY_PARTIAL = {
         "gaps": [],
         "end_inclusive": True,
     },
-    "data": 201156529,
+    "data": "201156529",  # the scalar legacy totals keep the BigFloat string
 }
 COVERED = {
     "range": {
@@ -93,7 +93,7 @@ LEGACY_BEFORE_LEADING_GAP = {
 # Swapped dates: a legacy function answers the live function's empty answer with no coverage (not a coverage verdict).
 LEGACY_INVERTED = {
     "range": {"requested_from": "2026-10-05T00:00:00+00:00", "requested_to": "2026-10-01T00:00:00+00:00", **NOTHING},
-    "data": 0,
+    "data": "0",
 }
 # The first draft of the contract said "nothing covered" with covered_from after covered_to.
 DRAFT_BEFORE = {
@@ -133,7 +133,7 @@ def _response(body):
 class TestUnwrapRange(unittest.TestCase):
     def test_new_shape(self):
         self.assertEqual(unwrap_range(PARTIAL_WITH_GAP), ([ROW], PARTIAL_WITH_GAP["range"]))
-        self.assertEqual(unwrap_range(LEGACY_PARTIAL), (201156529, LEGACY_PARTIAL["range"]))
+        self.assertEqual(unwrap_range(LEGACY_PARTIAL), ("201156529", LEGACY_PARTIAL["range"]))
         self.assertEqual(unwrap_range(LEGACY_BEFORE), (None, LEGACY_BEFORE["range"]))
 
     def test_old_shape(self):
