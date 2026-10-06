@@ -270,7 +270,8 @@ def _field_notes(name: str, data: Any, range_: dict) -> List[str]:
     covered_from, requested_from = range_.get("covered_from"), range_.get("requested_from")
     covered_to, requested_to = range_.get("covered_to"), range_.get("requested_to")
     notes = []
-    if _covers_nothing(range_):
+    covers_nothing = _covers_nothing(range_)
+    if covers_nothing:
         notes.append(f"{name}: {NOT_COVERED}, so it has no number to report: say not covered yet, never 0.")
     elif _time(covered_from) is not None and _time(covered_to) is not None:
         # A NULL requested bound asked for all the data on that side.
@@ -289,8 +290,10 @@ def _field_notes(name: str, data: Any, range_: dict) -> List[str]:
     spans = []
     for gap in range_.get("gaps") or []:
         if gap.get("from") is None:
-            # The leading gap: the history before the first written settlement, which the history job fills.
-            notes.append(f"{name}: no data before {gap.get('to')}: {HISTORY_NOT_INDEXED}, not covered, never 0.")
+            # The leading gap: the history before the first written settlement, which the history job fills. With
+            # data, "data since" already says it.
+            if covers_nothing:
+                notes.append(f"{name}: no data before {gap.get('to')}: {HISTORY_NOT_INDEXED}, not covered, never 0.")
         else:
             spans.append(f"{gap['from']} to {_bound(gap.get('to'), 'now')}")
     if spans:

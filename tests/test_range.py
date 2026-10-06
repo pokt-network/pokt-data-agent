@@ -190,6 +190,12 @@ class TestRangeNotes(unittest.TestCase):
         self.assertIn(NOT_COVERED, notes[0])
         self.assertIn("no data before 2026-09-01T12:00:00+00:00: the settlement history", notes[1])
 
+    def test_the_leading_gap_of_a_covered_answer_is_said_once(self):
+        value = {"range": {**LEGACY_PARTIAL["range"], "gaps": [{"from": None, "to": "2026-09-01T12:00:00+00:00"}]}}
+        notes = range_notes({"x": {**value, "data": 1}})
+        self.assertEqual(len(notes), 1)
+        self.assertIn("x: data since 2026-09-01T12:00:00+00:00", notes[0])
+
     def test_an_inverted_legacy_range_is_not_a_coverage_verdict(self):
         self.assertEqual(range_notes({"x": LEGACY_INVERTED}), [])
 
