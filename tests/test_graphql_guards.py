@@ -53,7 +53,7 @@ class TestQueryGuards(unittest.TestCase):
     def test_live_reward_functions_are_refused(self):
         args = '(addresses: ["pokt1x"], startDate: "2026-10-01T00:00:00Z", endDate: "2026-10-02T00:00:00Z")'
         for name in LIVE_REWARD_FIELDS:
-            legacy = "legacy" + name[len("get") :]
+            legacy = "legacy" + name[len("get") :].removesuffix("V2")
             for query in (
                 f"{{ {name}{args} }}",
                 f"{{ x: {name}{args} }}",
@@ -81,8 +81,12 @@ class TestQueryGuards(unittest.TestCase):
             with self.subTest(query=query):
                 self.assertRegex(guard(query), r"Use (getIncome|moneyCoverage|getSupplyFlows|getParamHistory)Json,")
 
+    def test_the_orphan_mint_v2_points_to_the_legacy_mint(self):
+        error = guard('{ getMintBreakdownBetweenDatesV2(startDate: "2026-10-01T00:00:00Z") }')
+        self.assertIn("use legacyMintBreakdownBetweenDates (same arguments", error)
+
     def test_legacy_twins_and_other_reward_functions_pass(self):
-        for name in [n.replace("get", "legacy", 1) for n in LIVE_REWARD_FIELDS] + [
+        for name in [n.replace("get", "legacy", 1).removesuffix("V2") for n in LIVE_REWARD_FIELDS] + [
             "getRewardsByDate",
             "getRewardsByDomainsAndTimeGroupByService",
         ]:

@@ -27,7 +27,8 @@ RAW_FIELD_HINT = (
 )
 # Live reward functions that the legacy... fields replace: each call scans the raw payout tables. The legacy twin
 # (the same name with "legacy" in place of "get") takes the same arguments and returns the same JSON (under "data"
-# once pocketdex answers {range, data}).
+# once pocketdex answers {range, data}). getMintBreakdownBetweenDatesV2 is a leftover of an older pocketdex release
+# (no current source creates it): its twin is legacyMintBreakdownBetweenDates.
 LIVE_REWARD_FIELDS = (
     "getRewardsByAddressesAndTime",
     "getRewardsByAddressesAndTimeGroupByAddressAndDate",
@@ -37,6 +38,7 @@ LIVE_REWARD_FIELDS = (
     "getRewardsBySuppliersAndTimeGroupByAddressAndDate",
     "getRewardsBySuppliersAndTimeGroupByService",
     "getMintBreakdownBetweenDates",
+    "getMintBreakdownBetweenDatesV2",
     "getBurnBreakdownBetweenDates",
 )
 # The settlement catalog functions, as GraphQL names: pocketdex CATALOG_FUNCTIONS
@@ -116,7 +118,7 @@ def _check_field(
         )
     if name in LIVE_REWARD_FIELDS:
         return (
-            f'"{name}" scans the raw payout tables and is not allowed: use legacy{name[len("get") :]} '
+            f'"{name}" scans the raw payout tables and is not allowed: use legacy{name[len("get") :].removesuffix("V2")} '
             '(same arguments and JSON, which a newer API puts under "data" next to a "range"), or the settlement '
             "catalog (getIncomeJson, getSupplyFlowsJson)."
         )
