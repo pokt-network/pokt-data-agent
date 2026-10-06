@@ -5,7 +5,13 @@ from unittest import mock
 from graphql import GraphQLError, parse
 
 from src.graphql_client import GRAPHQL_REGISTRY
-from src.graphql_validator import MAX_FIRST, MAX_VISITED_FIELDS, check_query_guards, validate_graphql_query
+from src.graphql_validator import (
+    LIVE_REWARD_FIELDS,
+    MAX_FIRST,
+    MAX_VISITED_FIELDS,
+    check_query_guards,
+    validate_graphql_query,
+)
 from src.tools_data import MAX_RESULT_CHARS, execute_graphql
 
 
@@ -23,6 +29,31 @@ class TestQueryGuards(unittest.TestCase):
         ):
             with self.subTest(query=query):
                 self.assertIn("raw payout table", guard(query))
+
+    def test_live_reward_functions_are_refused(self):
+        args = '(addresses: ["pokt1x"], startDate: "2026-10-01T00:00:00Z", endDate: "2026-10-02T00:00:00Z")'
+        for name in LIVE_REWARD_FIELDS:
+            legacy = "legacy" + name[len("get") :]
+            for query in (
+                f"{{ {name}{args} }}",
+                f"{{ x: {name}{args} }}",
+                f"{{ ...F }} fragment F on Query {{ {name}{args} }}",
+                f"{{ ... on Query {{ y: {name}{args} }} }}",
+                f'{{ block(id: "1") {{ id }} ...F }} fragment F on Query {{ ...G }} '
+                f"fragment G on Query {{ {name}{args} }}",
+            ):
+                with self.subTest(query=query):
+                    error = guard(query)
+                    self.assertIn(f'"{name}" scans the raw payout tables', error)
+                    self.assertIn(f"use {legacy} (same arguments and JSON)", error)
+
+    def test_legacy_twins_and_other_reward_functions_pass(self):
+        for name in [n.replace("get", "legacy", 1) for n in LIVE_REWARD_FIELDS] + [
+            "getRewardsByDate",
+            "getRewardsByDomainsAndTimeGroupByService",
+        ]:
+            with self.subTest(name=name):
+                self.assertIsNone(guard(f'{{ {name}(startDate: "2026-10-01T00:00:00Z") }}'))
 
     def test_connections_need_a_bounded_first(self):
         for query in (
@@ -106,6 +137,20 @@ class TestExecuteGraphqlTool(unittest.TestCase):
         self.assertEqual((success, result), (False, None))
         self.assertIn("raw payout table", error)
         client.return_value.execute_query.assert_not_called()
+
+    @mock.patch("src.tools_data.PocketNetworkAPIClient")
+    def test_live_reward_function_is_not_sent(self, client):
+        query = '{ total: getRewardsByAddressesAndTime(addresses: ["pokt1x"]) }'
+        success, result, error = execute_graphql.func(query=query)
+        self.assertEqual((success, result), (False, None))
+        self.assertIn("use legacyRewardsByAddressesAndTime", error)
+        client.return_value.execute_query.assert_not_called()
+
+    def test_sub_agent_validation_refuses_live_reward_functions(self):
+        query = '{ getMintBreakdownBetweenDates(startDate: "2026-10-01T00:00:00Z", endDate: "2026-10-02T00:00:00Z") }'
+        ok, _, error = validate_graphql_query(query, "legacyMintBreakdownBetweenDates")
+        self.assertFalse(ok)
+        self.assertIn("use legacyMintBreakdownBetweenDates", error)
 
     @mock.patch("src.tools_data.PocketNetworkAPIClient")
     def test_self_spreading_fragment_is_not_sent(self, client):

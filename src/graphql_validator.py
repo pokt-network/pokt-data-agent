@@ -25,6 +25,19 @@ RAW_FIELD_HINT = (
     "use getIncomeJson (by_supplier / by_service / by_reason, bucket hour for the finest grain) or "
     "getSupplierDistributionJson instead"
 )
+# Live reward functions that the legacy... fields replace: each call scans the raw payout tables. The legacy twin
+# (the same name with "legacy" in place of "get") takes the same arguments and returns the same JSON.
+LIVE_REWARD_FIELDS = (
+    "getRewardsByAddressesAndTime",
+    "getRewardsByAddressesAndTimeGroupByAddressAndDate",
+    "getRewardsByAddressesAndTimeGroupByDate",
+    "getRewardsByAddressesAndTimeGroupByService",
+    "getRewardsOfAddressesBySuppliersAndTime",
+    "getRewardsBySuppliersAndTimeGroupByAddressAndDate",
+    "getRewardsBySuppliersAndTimeGroupByService",
+    "getMintBreakdownBetweenDates",
+    "getBurnBreakdownBetweenDates",
+)
 # Largest page a connection may ask for; the API caps a connection at this many rows without saying so.
 MAX_FIRST = 1000
 # Most fields the guards visit in one query. Fragments spread in nested fields multiply the visits (2^n for n nested
@@ -73,6 +86,11 @@ def _check_field(
     name = field.name.value
     if name.startswith(RAW_FIELD_PREFIXES):
         return f'"{name}" reads a raw payout table and is not allowed: {RAW_FIELD_HINT}.'
+    if name in LIVE_REWARD_FIELDS:
+        return (
+            f'"{name}" scans the raw payout tables and is not allowed: use legacy{name[len("get") :]} '
+            "(same arguments and JSON), or the settlement catalog (getIncomeJson, getSupplyFlowsJson)."
+        )
     if field.selection_set is None:
         return None
 
