@@ -47,6 +47,16 @@ class TestQueryGuards(unittest.TestCase):
                     self.assertIn(f'"{name}" scans the raw payout tables', error)
                     self.assertIn(f"use {legacy} (same arguments and JSON", error)
 
+    def test_catalog_row_variants_are_refused(self):
+        for query in (
+            '{ getIncomeList(addresses: ["pokt1x"], rangeStart: "2026-10-01T00:00:00Z") { amountUpokt } }',
+            '{ x: moneyCoverageList(rangeStart: "2026-10-01T00:00:00Z") { settlements } }',
+            '{ ...F } fragment F on Query { getSupplyFlowsList(rangeStart: "2026-10-01T00:00:00Z") { flow } }',
+            '{ ... on Query { getParamHistoryList(rangeStart: "2026-10-01T00:00:00Z") { key } } }',
+        ):
+            with self.subTest(query=query):
+                self.assertRegex(guard(query), r"Use (getIncome|moneyCoverage|getSupplyFlows|getParamHistory)Json,")
+
     def test_legacy_twins_and_other_reward_functions_pass(self):
         for name in [n.replace("get", "legacy", 1) for n in LIVE_REWARD_FIELDS] + [
             "getRewardsByDate",

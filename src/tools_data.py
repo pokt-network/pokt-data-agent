@@ -179,6 +179,8 @@ Guards, checked before the query is sent:
 - Raw payout tables (modToAcctTransfers...) are refused: use the settlement catalog (getIncomeJson, ...).
 - The live reward functions ({", ".join(LIVE_REWARD_FIELDS)}) are refused:
   use their legacy... twin (same arguments) or the settlement catalog.
+- The row variants of the settlement catalog (getIncomeList, ..., moneyCoverageList) are refused: use the ...Json
+  function of the same name, which says the range it covers.
 - Every connection that selects "nodes" or "edges" needs a literal "first" between 1 and {MAX_FIRST}.
 A result longer than {MAX_RESULT_CHARS} characters is cut, and the error string says so.
 

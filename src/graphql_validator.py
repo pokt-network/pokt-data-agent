@@ -87,6 +87,13 @@ def _check_field(
     name = field.name.value
     if name.startswith(RAW_FIELD_PREFIXES):
         return f'"{name}" reads a raw payout table and is not allowed: {RAW_FIELD_HINT}.'
+    if name.endswith("List") and f"{name[: -len('List')]}Json" in GRAPHQL_REGISTRY:
+        # The row variant of a settlement catalog function: once pocketdex answers a range it does not cover with
+        # what it has, no rows cannot tell "not covered" from "nothing happened".
+        return (
+            f'"{name}" is not allowed: its rows cannot say that a range is not covered, so no rows would read as 0. '
+            f"Use {name[: -len('List')]}Json, which returns the same rows with the range it covers."
+        )
     if name in LIVE_REWARD_FIELDS:
         return (
             f'"{name}" scans the raw payout tables and is not allowed: use legacy{name[len("get") :]} '
