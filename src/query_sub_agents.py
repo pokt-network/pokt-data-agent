@@ -17,6 +17,8 @@ from src.graphql_client import (
     PocketNetworkAPIClient,
     final_error_reply,
     is_fixable_query_error,
+    not_covered_error,
+    range_notes,
 )
 from src.graphql_validator import validate_graphql_query
 from src.models import QueryFieldInfo, SubAgentResult
@@ -387,7 +389,7 @@ Generate a query that answers the user's question.
 For GraphQL: use one of the given fields with appropriate filters and aggregations (if needed).
 Keep queries simple. Check for pagination. Pass numerical fields in quotes.
 Every connection that selects "nodes" or "edges" needs a "first" between 1 and 1000; for counts and sums use totalCount or aggregates.
-Settlement catalog functions (get...Json, legacy..., moneyCoverageJson) take a [start, end) range in UTC with "Z". Their bucket allows hour up to 7 days, day up to 92 days, week up to 366 days. A range before their coverage is an error, never 0: do not answer it with another function.
+Settlement catalog functions (get...Json, legacy..., moneyCoverageJson) take a [start, end) range in UTC with "Z". Their bucket allows hour up to 7 days, day up to 92 days, week up to 366 days. A range before their coverage is not covered (an error, or a "range" with data null), never 0: do not answer it with another function.
 
 {output_instructions}
 
@@ -525,6 +527,9 @@ Return ONLY the JSON object, no extra text or markdown."""
             success, result, error_msg = self.rpc_client.execute_query(method, params, path_params)
         else:
             success, result, error_msg = self.graphql_client.execute_query(state["query"])
+            # A {range, data} answer that covers nothing is what the API raised before it answered with the range.
+            if success and not_covered_error(result):
+                success, result, error_msg = False, None, not_covered_error(result)
 
         if success:
             logger.info("[%s] %s query executed successfully.", self.name, endpoint_type.upper())
@@ -632,9 +637,11 @@ Return ONLY the JSON object, no extra text or markdown."""
         else:
             used_method_description = f"Endpoint: {POCKET_NETWORK_DATA_ENDPOINT}\n"
             used_method_description += GRAPHQL_REGISTRY.get(endpoint_method).description
+        notes = range_notes(final_state.get("query_result")) if endpoint_type == "graphql" else []
+        coverage = "".join(f"\nCoverage: {note}" for note in notes)
         return SubAgentResult(
             query=final_state["query"],
-            explanation=f"Used method description: {used_method_description}",
+            explanation=f"Used method description: {used_method_description}{coverage}",
             success=True,
             error=None,
             endpoint_type=endpoint_type,

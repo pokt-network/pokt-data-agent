@@ -12,6 +12,7 @@ from src.graphql_client import (
     GRAPHQL_REGISTRY,
     POCKET_NETWORK_DATA_ENDPOINT,
     PocketNetworkAPIClient,
+    range_notes,
 )
 from src.graphql_validator import MAX_FIRST, check_query_guards
 from src.query_sub_agents import ALL_SUBAGENTS
@@ -182,8 +183,10 @@ Guards, checked before the query is sent:
 - Every connection that selects "nodes" or "edges" needs a literal "first" between 1 and {MAX_FIRST}.
 A result longer than {MAX_RESULT_CHARS} characters is cut, and the error string says so.
 
-The settlement catalog and legacy... functions raise an error for a range their data does not cover yet: report
-that range as "not covered yet", never as 0.
+The settlement catalog and legacy... functions either raise an error for a range their data does not cover yet,
+or answer {{"range": {{requested_from, requested_to, covered_from, covered_to, gaps}}, "data": ...}} from the covered
+part; then the error string says from when the data is and which gaps it has. "data" null means not covered, never
+0. Report what is not covered as "not covered yet", never as 0.
 
 Args:
     query: GraphQL query string to be wrapped into "{{"query": query}}" and posted to the endpoint.
@@ -208,14 +211,16 @@ def execute_graphql(query: str) -> Tuple[bool, Any, str | None]:
 
     success, result, error = PocketNetworkAPIClient().execute_query(query)
     if success:
+        notes = " ".join(range_notes(result)) or None
         text = json.dumps(result)
         if len(text) > MAX_RESULT_CHARS:
             return (
                 True,
                 text[:MAX_RESULT_CHARS],
                 f"Result truncated to {MAX_RESULT_CHARS} of {len(text)} characters (the JSON is cut): "
-                "narrow the range or the filter, or use a coarser bucket.",
+                "narrow the range or the filter, or use a coarser bucket." + (f" {notes}" if notes else ""),
             )
+        return success, result, notes
     return success, result, error
 
 

@@ -3,7 +3,8 @@
 import json
 import os
 import re
-from typing import Any, Tuple
+from datetime import datetime, timezone
+from typing import Any, List, Tuple
 
 import requests
 
@@ -95,9 +96,13 @@ class PocketNetworkAPIClient:
             return False, None, f"Unexpected error: {str(e)}"
 
 
+# Said for an answer in the {range, data} shape that covers nothing of the range: what the API raised before it
+# answered with the range.
+NOT_COVERED = "no settlement data covers this range"
 # Errors of the settlement functions for a range their tables do not cover (pocketdex _check_coverage). The answer is
 # "not covered yet": another query cannot fix it.
 COVERAGE_ERRORS = (
+    NOT_COVERED,
     "no settlement height is written yet",
     "before the first written settlement",
     "which are not written (settlement_gaps)",
@@ -140,7 +145,11 @@ def final_error_reply(error: str | None) -> str | None:
     """
     if not error:
         return None
-    if "before the first written settlement" in error or "no settlement height is written yet" in error:
+    if (
+        "before the first written settlement" in error
+        or "no settlement height is written yet" in error
+        or NOT_COVERED in error
+    ):
         return (
             "Not covered yet: the settlement data for this range is not indexed yet, so there is no number to report "
             f"for it. Try a more recent range. Details: {error}"
@@ -192,18 +201,92 @@ def is_fixable_query_error(error: str | None) -> bool:
     )
 
 
+def unwrap_range(value: Any) -> Tuple[Any, dict | None]:
+    """Split the answer of a settlement function into (data, range).
+
+    pocketdex answers either with the bare JSON (and raises for a range it does not cover), or with
+    {"range": {requested_from, requested_to, covered_from, covered_to, gaps}, "data": <the same JSON>}, where data is
+    None when nothing in the range is covered. The JSON arrives parsed; the old BigFloat totals arrive as strings.
+    """
+    if isinstance(value, dict) and "data" in value and isinstance(value.get("range"), dict):
+        return value["data"], value["range"]
+    return value, None
+
+
+def _time(value: Any) -> datetime | None:
+    """A range bound as a UTC datetime (a bound without a zone is UTC), or None."""
+    try:
+        parsed = datetime.fromisoformat(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=timezone.utc) if parsed and parsed.tzinfo is None else parsed
+
+
+def _covers_nothing(data: Any, range_: dict) -> bool:
+    covered_from, covered_to = _time(range_.get("covered_from")), _time(range_.get("covered_to"))
+    return data is None or covered_from is None or (covered_to is not None and covered_from >= covered_to)
+
+
+def _ranged_fields(result: Any) -> List[Tuple[str, Any, dict]]:
+    """(field or alias, data, range) of each field of a GraphQL result that answers in the {range, data} shape."""
+    if not isinstance(result, dict):
+        return []
+    fields = []
+    for name, value in result.items():
+        data, range_ = unwrap_range(value)
+        if range_ is not None:
+            fields.append((name, data, range_))
+    return fields
+
+
+def range_notes(result: Any) -> List[str]:
+    """What the answer must say about the part of the range each field covers; empty for the bare-JSON shape."""
+    notes = []
+    for name, data, range_ in _ranged_fields(result):
+        covered_from, requested_from = range_.get("covered_from"), range_.get("requested_from")
+        if _covers_nothing(data, range_):
+            notes.append(
+                f"{name}: {NOT_COVERED} (covered from {covered_from} to {range_.get('covered_to')}), so it has no "
+                "number to report: say not covered yet, never 0."
+            )
+            continue
+        # covered_from parses here (_covers_nothing); a NULL start asked for everything since the first data.
+        if _time(requested_from) is None or _time(covered_from) > _time(requested_from):
+            notes.append(
+                f"{name}: data since {covered_from} (requested from {requested_from}): say so with the result."
+            )
+        gaps = range_.get("gaps") or []
+        if gaps:
+            spans = ", ".join(f"{gap.get('from')} to {gap.get('to')}" for gap in gaps)
+            notes.append(f"{name}: gaps with no data, not covered (never 0): {spans}.")
+    return notes
+
+
+def not_covered_error(result: Any) -> str | None:
+    """The coverage error for a result whose every field is in the {range, data} shape and covers nothing, else None."""
+    fields = _ranged_fields(result)
+    if not fields or len(fields) < len(result) or not all(_covers_nothing(data, r) for _, data, r in fields):
+        return None
+    return "Settlement range: " + "; ".join(range_notes(result))
+
+
 # Rules shared by the settlement catalog functions (get...Json, moneyCoverageJson), which read precomputed
 # settlement tables: fast, but they cover settlements from a starting height only and cap the range per bucket.
 COVERAGE_NOTE = (
     "The settlement data starts at a height that moves back toward genesis while the history is filled (mainnet: "
-    "April 2026 as of October 2026; moneyCoverageJson tells). A range that starts before it, or crosses a gap, is an "
-    "error, never 0: report that range as not covered yet, and do not retry it."
+    "April 2026 as of October 2026; moneyCoverageJson tells). The API answers in one of two shapes. Bare JSON: a "
+    "range that starts before the data, or crosses a gap, is an error. Or "
+    '{"range": {"requested_from", "requested_to", "covered_from", "covered_to", "gaps": [{"from", "to"}]}, '
+    '"data": <the same JSON>}, answered from the covered part: data null (or covered_from not before covered_to) '
+    'means nothing is covered; a covered_from later than requested_from means the data starts there (say "data '
+    'since <covered_from>"); the gaps have no data. A range or gap not covered is "not covered yet", never 0: '
+    "report it so, and do not retry it."
 )
 CATALOG_NOTES = {
     "rangeStart/rangeEnd": "The range [start, end) in UTC with an explicit zone, e.g. 2026-10-01T00:00:00Z. Pass both.",
     "bucket": "Omit for one total per row, or hour (range up to 7 days), day (up to 92 days), week (up to 366 days), month or year. A range longer than the bucket allows is an error that names the bucket to use.",
     "coverage": COVERAGE_NOTE,
-    "result": 'A JSON array of rows with snake_case keys; amounts and counts are strings (upokt). "all" in a column means the rows are not split by it. Within a covered range, a missing row means 0.',
+    "result": 'A JSON array of rows (in "data" in the {range, data} shape) with snake_case keys; amounts and counts are strings (upokt). "all" in a column means the rows are not split by it. Within a covered range, a missing row means 0.',
 }
 # The legacy... functions keep the arguments and JSON of the functions they replace, read from the same tables.
 LEGACY_NOTES = {"coverage": COVERAGE_NOTE}
