@@ -145,6 +145,12 @@ def final_error_reply(error: str | None) -> str | None:
     """
     if not error:
         return None
+    # First: a {range, data} answer that covers nothing because it lies in a gap says both (the API errors never do).
+    if "which are not written (settlement_gaps)" in error:
+        return (
+            "Not covered yet: this range overlaps settlement heights that are not written yet (a gap), so there is no "
+            f"number to report for it. Try a range outside the gap, or again later. Details: {error}"
+        )
     if (
         "before the first written settlement" in error
         or "no settlement height is written yet" in error
@@ -153,11 +159,6 @@ def final_error_reply(error: str | None) -> str | None:
         return (
             "Not covered yet: the settlement data for this range is not indexed yet, so there is no number to report "
             f"for it. Try a more recent range. Details: {error}"
-        )
-    if "which are not written (settlement_gaps)" in error:
-        return (
-            "Not covered yet: this range overlaps settlement heights that are not written yet (a gap), so there is no "
-            f"number to report for it. Try a range outside the gap, or again later. Details: {error}"
         )
     if "run rebuild_rollups first" in error:
         return (
@@ -239,27 +240,39 @@ def _ranged_fields(result: Any) -> List[Tuple[str, Any, dict]]:
     return fields
 
 
-def range_notes(result: Any) -> List[str]:
-    """What the answer must say about the part of the range each field covers; empty for the bare-JSON shape."""
+def _field_notes(name: str, data: Any, range_: dict) -> List[str]:
+    covered_from, requested_from = range_.get("covered_from"), range_.get("requested_from")
+    covered_to, requested_to = range_.get("covered_to"), range_.get("requested_to")
     notes = []
-    for name, data, range_ in _ranged_fields(result):
-        covered_from, requested_from = range_.get("covered_from"), range_.get("requested_from")
-        if _covers_nothing(data, range_):
-            notes.append(
-                f"{name}: {NOT_COVERED} (covered from {covered_from} to {range_.get('covered_to')}), so it has no "
-                "number to report: say not covered yet, never 0."
-            )
-            continue
-        # covered_from parses here (_covers_nothing); a NULL start asked for everything since the first data.
+    if _covers_nothing(data, range_):
+        notes.append(
+            f"{name}: {NOT_COVERED} (covered from {covered_from} to {covered_to}), so it has no number to report: "
+            "say not covered yet, never 0."
+        )
+    else:
+        # covered_from parses here (_covers_nothing); a NULL requested bound asked for all the data on that side.
         if _time(requested_from) is None or _time(covered_from) > _time(requested_from):
             notes.append(
                 f"{name}: data since {covered_from} (requested from {requested_from}): say so with the result."
             )
-        gaps = range_.get("gaps") or []
-        if gaps:
-            spans = ", ".join(f"{gap.get('from')} to {gap.get('to')}" for gap in gaps)
-            notes.append(f"{name}: gaps with no data, not covered (never 0): {spans}.")
+        if _time(covered_to) is not None and (_time(requested_to) is None or _time(covered_to) < _time(requested_to)):
+            notes.append(
+                f"{name}: data until {covered_to} (requested to {requested_to}): say so with the result; what comes "
+                "after it is not covered yet, never 0."
+            )
+    gaps = range_.get("gaps") or []
+    if gaps:
+        spans = ", ".join(f"{gap.get('from')} to {gap.get('to')}" for gap in gaps)
+        notes.append(
+            f"{name}: no data from {spans}: settlement heights which are not written (settlement_gaps), not covered, "
+            "never 0."
+        )
     return notes
+
+
+def range_notes(result: Any) -> List[str]:
+    """What the answer must say about the part of the range each field covers; empty for the bare-JSON shape."""
+    return [note for name, data, range_ in _ranged_fields(result) for note in _field_notes(name, data, range_)]
 
 
 def not_covered_error(result: Any) -> str | None:
@@ -267,7 +280,7 @@ def not_covered_error(result: Any) -> str | None:
     fields = _ranged_fields(result)
     if not fields or len(fields) < len(result) or not all(_covers_nothing(data, r) for _, data, r in fields):
         return None
-    return "Settlement range: " + "; ".join(range_notes(result))
+    return "Settlement range: " + " ".join(note for field in fields for note in _field_notes(*field))
 
 
 # Rules shared by the settlement catalog functions (get...Json, moneyCoverageJson), which read precomputed
@@ -279,7 +292,7 @@ COVERAGE_NOTE = (
     '{"range": {"requested_from", "requested_to", "covered_from", "covered_to", "gaps": [{"from", "to"}]}, '
     '"data": <the same JSON>}, answered from the covered part: data null (or covered_from not before covered_to) '
     'means nothing is covered; a covered_from later than requested_from means the data starts there (say "data '
-    'since <covered_from>"); the gaps have no data. A range or gap not covered is "not covered yet", never 0: '
+    'since <covered_from>"), and a covered_to earlier than requested_to that it ends there; the gaps have no data. A range or gap not covered is "not covered yet", never 0: '
     "report it so, and do not retry it."
 )
 CATALOG_NOTES = {

@@ -528,8 +528,9 @@ Return ONLY the JSON object, no extra text or markdown."""
         else:
             success, result, error_msg = self.graphql_client.execute_query(state["query"])
             # A {range, data} answer that covers nothing is what the API raised before it answered with the range.
-            if success and not_covered_error(result):
-                success, result, error_msg = False, None, not_covered_error(result)
+            not_covered = not_covered_error(result) if success else None
+            if not_covered:
+                success, result, error_msg = False, None, not_covered
 
         if success:
             logger.info("[%s] %s query executed successfully.", self.name, endpoint_type.upper())

@@ -39,6 +39,17 @@ PARTIAL_WITH_GAP = {
     },
     "data": [ROW],
 }
+# A legacy range that lies inside a settlement gap: nothing to read.
+LEGACY_IN_GAP = {
+    "range": {
+        "requested_from": "2026-09-01T23:40:00+00:00",
+        "requested_to": "2026-09-01T23:50:00+00:00",
+        "covered_from": "2026-09-01T23:40:00+00:00",
+        "covered_to": "2026-09-01T23:50:00+00:00",
+        "gaps": [{"from": "2026-09-01T23:30:00+00:00", "to": "2026-09-02T00:00:00+00:00"}],
+    },
+    "data": None,
+}
 # A catalog range that ends before coverage: no rows.
 CATALOG_BEFORE = {
     "range": {
@@ -99,12 +110,14 @@ class TestUnwrapRange(unittest.TestCase):
 
 
 class TestRangeNotes(unittest.TestCase):
-    def test_partial_range_says_since_when_and_the_gaps(self):
+    def test_partial_range_says_since_and_until_when_and_the_gaps(self):
         notes = range_notes({"getIncomeJson": PARTIAL_WITH_GAP})
-        self.assertEqual(len(notes), 2)
+        self.assertEqual(len(notes), 3)
         self.assertIn("getIncomeJson: data since 2026-09-01T12:00:00+00:00", notes[0])
-        self.assertIn("2026-09-01T23:30:00+00:00 to 2026-09-02T00:00:00+00:00", notes[1])
-        self.assertIn("not covered", notes[1])
+        self.assertIn("getIncomeJson: data until 2026-09-02T08:20:00+00:00", notes[1])
+        self.assertIn("never 0", notes[1])
+        self.assertIn("no data from 2026-09-01T23:30:00+00:00 to 2026-09-02T00:00:00+00:00", notes[2])
+        self.assertIn("never 0", notes[2])
 
     def test_nothing_covered_is_never_zero(self):
         for value in (LEGACY_BEFORE, CATALOG_BEFORE):
@@ -129,6 +142,10 @@ class TestRangeNotes(unittest.TestCase):
         (note,) = range_notes({"x": value})
         self.assertIn("x: data since 2026-09-02T00:00:00+00:00 (requested from None)", note)
 
+    def test_a_missing_covered_to_says_nothing_about_the_end(self):
+        value = {"range": {**COVERED["range"], "covered_to": None}, "data": COVERED["data"]}
+        self.assertEqual(range_notes({"x": value}), [])
+
     def test_bounds_without_a_zone_are_utc(self):
         value = {"range": {**COVERED["range"], "requested_from": "2026-09-01T00:00:00"}, "data": COVERED["data"]}
         self.assertIn("data since", range_notes({"x": value})[0])
@@ -142,7 +159,13 @@ class TestNotCovered(unittest.TestCase):
         self.assertFalse(is_fixable_query_error(error))
         reply = final_error_reply(error)
         self.assertTrue(reply.startswith("Not covered yet"))
+        self.assertIn("Try a more recent range", reply)
         self.assertIsNone(re.search(r"\b0\b|zero", reply.split("Details:")[0]))
+
+    def test_nothing_covered_inside_a_gap_gets_the_gap_reply(self):
+        error = not_covered_error({"total": LEGACY_IN_GAP})
+        self.assertIn(NOT_COVERED, error)
+        self.assertIn("(a gap)", final_error_reply(error))
 
     def test_any_covered_field_is_not_an_error(self):
         for result in (
@@ -164,7 +187,14 @@ class TestExecuteGraphqlRange(unittest.TestCase):
         success, returned, note = execute_graphql.func(query="{ getIncomeJson }")
         self.assertEqual((success, returned), (True, result))
         self.assertIn("data since 2026-09-01T12:00:00+00:00", note)
-        self.assertIn("gaps with no data", note)
+        self.assertIn("no data from 2026-09-01T23:30:00+00:00", note)
+
+    @mock.patch("src.tools_data.PocketNetworkAPIClient")
+    def test_nothing_covered_fails_like_the_coverage_error(self, client):
+        client.return_value.execute_query.return_value = (True, {"total": LEGACY_BEFORE}, None)
+        success, returned, error = execute_graphql.func(query="{ total: legacyRewardsByAddressesAndTime }")
+        self.assertEqual((success, returned), (False, None))
+        self.assertTrue(is_coverage_error(error))
 
     @mock.patch("src.tools_data.PocketNetworkAPIClient")
     def test_the_old_shape_is_returned_as_is(self, client):
@@ -210,7 +240,8 @@ class TestAgentRange(unittest.TestCase):
         self.assertIsNone(state.get("error"))
         self.assertEqual(state["query_result"], {"getIncomeJson": PARTIAL_WITH_GAP})
         self.assertIn("Coverage: getIncomeJson: data since 2026-09-01T12:00:00+00:00", state["agent_notes"])
-        self.assertIn("Coverage: getIncomeJson: gaps with no data", state["agent_notes"])
+        self.assertIn("Coverage: getIncomeJson: data until 2026-09-02T08:20:00+00:00", state["agent_notes"])
+        self.assertIn("Coverage: getIncomeJson: no data from 2026-09-01T23:30:00+00:00", state["agent_notes"])
 
     def test_nothing_covered_ends_as_not_covered_without_a_retry(self):
         agent, sub_agent, state = self._run({"getIncomeJson": CATALOG_BEFORE})

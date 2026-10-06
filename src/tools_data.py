@@ -12,6 +12,7 @@ from src.graphql_client import (
     GRAPHQL_REGISTRY,
     POCKET_NETWORK_DATA_ENDPOINT,
     PocketNetworkAPIClient,
+    not_covered_error,
     range_notes,
 )
 from src.graphql_validator import MAX_FIRST, check_query_guards
@@ -185,8 +186,9 @@ A result longer than {MAX_RESULT_CHARS} characters is cut, and the error string 
 
 The settlement catalog and legacy... functions either raise an error for a range their data does not cover yet,
 or answer {{"range": {{requested_from, requested_to, covered_from, covered_to, gaps}}, "data": ...}} from the covered
-part; then the error string says from when the data is and which gaps it has. "data" null means not covered, never
-0. Report what is not covered as "not covered yet", never as 0.
+part; then the error string says from and until when the data is and which gaps it has, and an answer that covers
+nothing fails like the error. "data" null means not covered, never 0. Report what is not covered as "not covered
+yet", never as 0.
 
 Args:
     query: GraphQL query string to be wrapped into "{{"query": query}}" and posted to the endpoint.
@@ -210,6 +212,10 @@ def execute_graphql(query: str) -> Tuple[bool, Any, str | None]:
         return False, None, guard_error
 
     success, result, error = PocketNetworkAPIClient().execute_query(query)
+    # A {range, data} answer that covers nothing fails as the API's coverage error did before it answered with a range.
+    not_covered = not_covered_error(result) if success else None
+    if not_covered:
+        return False, None, not_covered
     if success:
         notes = " ".join(range_notes(result)) or None
         text = json.dumps(result)
