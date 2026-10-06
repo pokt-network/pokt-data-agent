@@ -205,8 +205,8 @@ class TestNotCovered(unittest.TestCase):
         self.assertTrue(is_coverage_error(error))
         self.assertFalse(is_fixable_query_error(error))
         reply = final_error_reply(error)
-        self.assertTrue(reply.startswith("Not covered yet"))
-        self.assertIn("Try a more recent range", reply)
+        # Nothing says whether the range is before the data or past the latest block: no advice on which way to move.
+        self.assertTrue(reply.startswith("Not covered yet: no indexed data covers this range yet"))
         self.assertIsNone(re.search(r"\b0\b|zero", reply.split("Details:")[0]))
 
     def test_before_coverage_with_the_leading_gap_gets_the_more_recent_range_reply(self):
@@ -217,6 +217,17 @@ class TestNotCovered(unittest.TestCase):
         error = not_covered_error({"total": CATALOG_IN_GAP})
         self.assertIn(NOT_COVERED, error)
         self.assertIn("(a gap)", final_error_reply(error))
+
+    def test_a_catalog_range_with_no_start_that_covers_nothing_is_an_error(self):
+        # NULL rangeStart = the whole history for the catalog: null coverage is a verdict there.
+        value = {"range": {**CATALOG_BEFORE["range"], "requested_from": None}, "data": []}
+        self.assertIn(NOT_COVERED, not_covered_error({"getIncomeJson": value}))
+
+    def test_rows_that_report_coverage_are_kept(self):
+        # moneyCoverageJson answers its row for a range it covers nothing of: that row is the answer.
+        value = {"range": CATALOG_BEFORE["range"], "data": [{"settlements": "0", "missing_heights": "0", "gaps": []}]}
+        self.assertIsNone(not_covered_error({"moneyCoverageJson": value}))
+        self.assertIn(NOT_COVERED, range_notes({"moneyCoverageJson": value})[0])
 
     def test_any_covered_field_is_not_an_error(self):
         for result in (

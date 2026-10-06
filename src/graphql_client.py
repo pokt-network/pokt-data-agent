@@ -102,7 +102,9 @@ class PocketNetworkAPIClient:
 
 # Said for an answer in the {range, data} shape that covers nothing of the range: what the API raised before it
 # answered with the range.
-NOT_COVERED = "no settlement data covers this range"
+NOT_COVERED = "no indexed data covers this range"
+# Said for the leading gap of a {range, data} answer: the history the history job has not written yet.
+HISTORY_NOT_INDEXED = "the settlement history before it is not indexed yet"
 # Errors of the settlement functions for a range their tables do not cover (pocketdex _check_coverage). The answer is
 # "not covered yet": another query cannot fix it.
 COVERAGE_ERRORS = (
@@ -158,11 +160,17 @@ def final_error_reply(error: str | None) -> str | None:
     if (
         "before the first written settlement" in error
         or "no settlement height is written yet" in error
-        or NOT_COVERED in error
+        or HISTORY_NOT_INDEXED in error
     ):
         return (
             "Not covered yet: the settlement data for this range is not indexed yet, so there is no number to report "
             f"for it. Try a more recent range. Details: {error}"
+        )
+    # Nothing covered, and nothing says on which side: before the data, or after the latest indexed block.
+    if NOT_COVERED in error:
+        return (
+            "Not covered yet: no indexed data covers this range yet, so there is no number to report for it. "
+            f"Details: {error}"
         )
     if "run rebuild_rollups first" in error:
         return (
@@ -232,11 +240,11 @@ def _covers_nothing(range_: dict) -> bool:
     """Nothing in the range is covered: the covered bounds are None (or, from an earlier pocketdex, inverted).
 
     data None alone does not say it: a legacy date series over a covered range with no rows is None too. Nor do None
-    bounds over an inverted or half-open requested range: a legacy function then answers the live function's empty
-    answer (it matches nothing), which is not a coverage verdict.
+    bounds over an inverted requested range: a legacy function then answers the live function's empty answer (it
+    matches nothing), which is not a coverage verdict.
     """
     requested_from, requested_to = _time(range_.get("requested_from")), _time(range_.get("requested_to"))
-    if requested_from is None or requested_to is None or requested_from > requested_to:
+    if requested_from is not None and requested_to is not None and requested_from > requested_to:
         return False
     covered_from, covered_to = _time(range_.get("covered_from")), _time(range_.get("covered_to"))
     return covered_from is None or covered_to is None or covered_from > covered_to
@@ -282,10 +290,7 @@ def _field_notes(name: str, data: Any, range_: dict) -> List[str]:
     for gap in range_.get("gaps") or []:
         if gap.get("from") is None:
             # The leading gap: the history before the first written settlement, which the history job fills.
-            notes.append(
-                f"{name}: no data before {gap.get('to')}: the settlement history before it is not indexed yet, not "
-                "covered, never 0."
-            )
+            notes.append(f"{name}: no data before {gap.get('to')}: {HISTORY_NOT_INDEXED}, not covered, never 0.")
         else:
             spans.append(f"{gap['from']} to {_bound(gap.get('to'), 'now')}")
     if spans:
@@ -302,9 +307,17 @@ def range_notes(result: Any) -> List[str]:
 
 
 def not_covered_error(result: Any) -> str | None:
-    """The coverage error for a result whose every field is in the {range, data} shape and covers nothing, else None."""
+    """The coverage error for a result whose every field is in the {range, data} shape and covers nothing, else None.
+
+    A field whose data is still a non-empty list keeps its answer, with the not-covered note: moneyCoverageJson's row
+    reports the coverage itself, and a legacy by-service answer lists the services with zeros.
+    """
     fields = _ranged_fields(result)
-    if not fields or len(fields) < len(result) or not all(_covers_nothing(r) for _, _, r in fields):
+    if (
+        not fields
+        or len(fields) < len(result)
+        or not all(_covers_nothing(r) and not (isinstance(data, list) and data) for _, data, r in fields)
+    ):
         return None
     return "Settlement range: " + " ".join(note for field in fields for note in _field_notes(*field))
 
