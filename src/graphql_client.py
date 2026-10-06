@@ -278,7 +278,7 @@ def _field_notes(name: str, data: Any, range_: dict) -> List[str]:
         if _time(requested_from) is None or _time(covered_from) > _time(requested_from):
             notes.append(
                 f"{name}: data since {covered_from} (requested from {_bound(requested_from, 'the start')}): say so "
-                "with the result."
+                "with the result; what comes before it is not covered yet, never 0."
             )
         if _time(requested_to) is None or _time(covered_to) < _time(requested_to):
             notes.append(
@@ -312,15 +312,11 @@ def range_notes(result: Any) -> List[str]:
 def not_covered_error(result: Any) -> str | None:
     """The coverage error for a result whose every field is in the {range, data} shape and covers nothing, else None.
 
-    A field whose data is still a non-empty list keeps its answer, with the not-covered note: moneyCoverageJson's row
-    reports the coverage itself, and a legacy by-service answer lists the services with zeros.
+    Whatever data such a field carries (a legacy by-service list of zeros, the zero mint object) is not a number to
+    report, so the answer fails as the API's coverage error did.
     """
     fields = _ranged_fields(result)
-    if (
-        not fields
-        or len(fields) < len(result)
-        or not all(_covers_nothing(r) and not (isinstance(data, list) and data) for _, data, r in fields)
-    ):
+    if not fields or len(fields) < len(result) or not all(_covers_nothing(r) for _, _, r in fields):
         return None
     return "Settlement range: " + " ".join(note for field in fields for note in _field_notes(*field))
 

@@ -211,7 +211,7 @@ def execute_graphql(query: str) -> Tuple[bool, Any, str | None]:
 
     success, result, error = PocketNetworkAPIClient().execute_query(query)
     if success:
-        notes = " ".join(range_notes(result)) or None
+        notes = " ".join(f"Coverage: {note}" for note in range_notes(result)) or None
         text = json.dumps(result)
         if len(text) > MAX_RESULT_CHARS:
             return (

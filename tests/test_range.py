@@ -145,6 +145,7 @@ class TestRangeNotes(unittest.TestCase):
         notes = range_notes({"getIncomeJson": PARTIAL_WITH_GAP})
         self.assertEqual(len(notes), 3)
         self.assertIn("getIncomeJson: data since 2026-09-01T12:00:00+00:00", notes[0])
+        self.assertIn("never 0", notes[0])
         self.assertIn("getIncomeJson: data until 2026-09-02T08:20:00+00:00", notes[1])
         self.assertIn("never 0", notes[1])
         self.assertIn("no data from 2026-09-01T23:30:00+00:00 to 2026-09-02T00:00:00+00:00", notes[2])
@@ -229,11 +230,10 @@ class TestNotCovered(unittest.TestCase):
         value = {"range": {**CATALOG_BEFORE["range"], "requested_from": None}, "data": []}
         self.assertIn(NOT_COVERED, not_covered_error({"getIncomeJson": value}))
 
-    def test_rows_that_report_coverage_are_kept(self):
-        # moneyCoverageJson answers its row for a range it covers nothing of: that row is the answer.
-        value = {"range": CATALOG_BEFORE["range"], "data": [{"settlements": "0", "missing_heights": "0", "gaps": []}]}
-        self.assertIsNone(not_covered_error({"moneyCoverageJson": value}))
-        self.assertIn(NOT_COVERED, range_notes({"moneyCoverageJson": value})[0])
+    def test_zeros_for_a_range_that_covers_nothing_are_an_error(self):
+        # A legacy by-service answer lists the configured services with zeros when nothing is covered.
+        value = {"range": LEGACY_BEFORE["range"], "data": [{"service_id": "eth", "relays": 0, "net_rewards": 0}]}
+        self.assertIn(NOT_COVERED, not_covered_error({"legacyRewardsByAddressesAndTimeGroupByService": value}))
 
     def test_any_covered_field_is_not_an_error(self):
         for result in (
@@ -267,7 +267,7 @@ class TestExecuteGraphqlRange(unittest.TestCase):
         client.return_value.execute_query.return_value = (True, result, None)
         success, returned, note = execute_graphql.func(query="{ getIncomeJson }")
         self.assertEqual((success, returned), (True, result))
-        self.assertIn("data since 2026-09-01T12:00:00+00:00", note)
+        self.assertIn("Coverage: getIncomeJson: data since 2026-09-01T12:00:00+00:00", note)
         self.assertIn("no data from 2026-09-01T23:30:00+00:00", note)
 
     @mock.patch("src.graphql_client.requests.post")
