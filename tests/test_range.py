@@ -83,6 +83,16 @@ CATALOG_IN_GAP = {
     },
     "data": [],
 }
+# Before coverage on a database whose history job is still filling: the leading gap is listed, unbounded at its start.
+LEGACY_BEFORE_LEADING_GAP = {
+    "range": {**LEGACY_BEFORE["range"], "gaps": [{"from": None, "to": "2026-09-01T12:00:00+00:00"}]},
+    "data": None,
+}
+# Swapped dates: a legacy function answers the live function's empty answer with no coverage (not a coverage verdict).
+LEGACY_INVERTED = {
+    "range": {"requested_from": "2026-10-05T00:00:00+00:00", "requested_to": "2026-10-01T00:00:00+00:00", **NOTHING},
+    "data": 0,
+}
 # The first draft of the contract said "nothing covered" with covered_from after covered_to.
 DRAFT_BEFORE = {
     "range": {
@@ -170,10 +180,18 @@ class TestRangeNotes(unittest.TestCase):
             "data": COVERED["data"],
         }
         notes = range_notes({"x": value})
-        self.assertIn("x: data since 2026-09-02T00:00:00+00:00 (requested from None)", notes[0])
-        self.assertIn("x: data until 2026-09-02T06:00:00+00:00 (requested to None)", notes[1])
-        gap = {"range": {**NOTHING, "gaps": [{"from": None, "to": "2026-04-01T00:00:00+00:00"}]}, "data": None}
-        self.assertIn("no data from the start of the chain to 2026-04-01T00:00:00+00:00", range_notes({"x": gap})[1])
+        self.assertIn("x: data since 2026-09-02T00:00:00+00:00 (requested from the start)", notes[0])
+        self.assertIn("x: data until 2026-09-02T06:00:00+00:00 (requested to now)", notes[1])
+        gap = {"range": {**COVERED["range"], "gaps": [{"from": "2026-09-02T05:00:00+00:00", "to": None}]}, "data": 1}
+        self.assertIn("no data from 2026-09-02T05:00:00+00:00 to now", range_notes({"x": gap})[0])
+
+    def test_the_leading_gap_says_the_history_is_not_indexed_yet(self):
+        notes = range_notes({"x": LEGACY_BEFORE_LEADING_GAP})
+        self.assertIn(NOT_COVERED, notes[0])
+        self.assertIn("no data before 2026-09-01T12:00:00+00:00: the settlement history", notes[1])
+
+    def test_an_inverted_legacy_range_is_not_a_coverage_verdict(self):
+        self.assertEqual(range_notes({"x": LEGACY_INVERTED}), [])
 
     def test_bounds_without_a_zone_are_utc(self):
         value = {"range": {**COVERED["range"], "requested_from": "2026-09-01T00:00:00"}, "data": COVERED["data"]}
@@ -191,6 +209,10 @@ class TestNotCovered(unittest.TestCase):
         self.assertIn("Try a more recent range", reply)
         self.assertIsNone(re.search(r"\b0\b|zero", reply.split("Details:")[0]))
 
+    def test_before_coverage_with_the_leading_gap_gets_the_more_recent_range_reply(self):
+        reply = final_error_reply(not_covered_error({"total": LEGACY_BEFORE_LEADING_GAP}))
+        self.assertIn("Try a more recent range", reply)
+
     def test_nothing_covered_inside_a_gap_gets_the_gap_reply(self):
         error = not_covered_error({"total": CATALOG_IN_GAP})
         self.assertIn(NOT_COVERED, error)
@@ -202,6 +224,7 @@ class TestNotCovered(unittest.TestCase):
             {"a": LEGACY_BEFORE, "b": OLD_MINT},
             {"a": PARTIAL_WITH_GAP},
             {"a": LEGACY_SERIES_EMPTY},
+            {"a": LEGACY_INVERTED},
             {"a": OLD_ROWS},
             {"a": None},
         ):

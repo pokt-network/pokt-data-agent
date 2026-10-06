@@ -45,7 +45,7 @@ class TestQueryGuards(unittest.TestCase):
                 with self.subTest(query=query):
                     error = guard(query)
                     self.assertIn(f'"{name}" scans the raw payout tables', error)
-                    self.assertIn(f"use {legacy} (same arguments and JSON)", error)
+                    self.assertIn(f"use {legacy} (same arguments and JSON", error)
 
     def test_legacy_twins_and_other_reward_functions_pass(self):
         for name in [n.replace("get", "legacy", 1) for n in LIVE_REWARD_FIELDS] + [

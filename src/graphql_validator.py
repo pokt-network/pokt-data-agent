@@ -26,7 +26,8 @@ RAW_FIELD_HINT = (
     "getSupplierDistributionJson instead"
 )
 # Live reward functions that the legacy... fields replace: each call scans the raw payout tables. The legacy twin
-# (the same name with "legacy" in place of "get") takes the same arguments and returns the same JSON.
+# (the same name with "legacy" in place of "get") takes the same arguments and returns the same JSON (under "data"
+# once pocketdex answers {range, data}).
 LIVE_REWARD_FIELDS = (
     "getRewardsByAddressesAndTime",
     "getRewardsByAddressesAndTimeGroupByAddressAndDate",
@@ -89,7 +90,8 @@ def _check_field(
     if name in LIVE_REWARD_FIELDS:
         return (
             f'"{name}" scans the raw payout tables and is not allowed: use legacy{name[len("get") :]} '
-            "(same arguments and JSON), or the settlement catalog (getIncomeJson, getSupplyFlowsJson)."
+            '(same arguments and JSON, which a newer API puts under "data" next to a "range"), or the settlement '
+            "catalog (getIncomeJson, getSupplyFlowsJson)."
         )
     if field.selection_set is None:
         return None

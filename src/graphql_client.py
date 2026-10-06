@@ -229,8 +229,15 @@ def _time(value: Any) -> datetime | None:
 
 
 def _covers_nothing(range_: dict) -> bool:
-    """Nothing in the range is covered: the bounds are None (or, from an earlier pocketdex, inverted). data None alone
-    does not say it: a legacy date series over a covered range with no rows is None too."""
+    """Nothing in the range is covered: the covered bounds are None (or, from an earlier pocketdex, inverted).
+
+    data None alone does not say it: a legacy date series over a covered range with no rows is None too. Nor do None
+    bounds over an inverted or half-open requested range: a legacy function then answers the live function's empty
+    answer (it matches nothing), which is not a coverage verdict.
+    """
+    requested_from, requested_to = _time(range_.get("requested_from")), _time(range_.get("requested_to"))
+    if requested_from is None or requested_to is None or requested_from > requested_to:
+        return False
     covered_from, covered_to = _time(range_.get("covered_from")), _time(range_.get("covered_to"))
     return covered_from is None or covered_to is None or covered_from > covered_to
 
@@ -257,27 +264,34 @@ def _field_notes(name: str, data: Any, range_: dict) -> List[str]:
     notes = []
     if _covers_nothing(range_):
         notes.append(f"{name}: {NOT_COVERED}, so it has no number to report: say not covered yet, never 0.")
-    else:
-        # Both bounds parse here (_covers_nothing); a NULL requested bound asked for all the data on that side.
+    elif _time(covered_from) is not None and _time(covered_to) is not None:
+        # A NULL requested bound asked for all the data on that side.
         if _time(requested_from) is None or _time(covered_from) > _time(requested_from):
             notes.append(
-                f"{name}: data since {covered_from} (requested from {requested_from}): say so with the result."
+                f"{name}: data since {covered_from} (requested from {_bound(requested_from, 'the start')}): say so "
+                "with the result."
             )
         if _time(requested_to) is None or _time(covered_to) < _time(requested_to):
             notes.append(
-                f"{name}: data until {covered_to} (requested to {requested_to}): say so with the result; what comes "
-                "after it is not covered yet, never 0."
+                f"{name}: data until {covered_to} (requested to {_bound(requested_to, 'now')}): say so with the "
+                "result; what comes after it is not covered yet, never 0."
             )
         if data is None:
             notes.append(f"{name}: data null: the function found nothing in the covered part of the range.")
-    gaps = range_.get("gaps") or []
-    if gaps:
-        spans = ", ".join(
-            f"{_bound(gap.get('from'), 'the start of the chain')} to {_bound(gap.get('to'), 'now')}" for gap in gaps
-        )
+    spans = []
+    for gap in range_.get("gaps") or []:
+        if gap.get("from") is None:
+            # The leading gap: the history before the first written settlement, which the history job fills.
+            notes.append(
+                f"{name}: no data before {gap.get('to')}: the settlement history before it is not indexed yet, not "
+                "covered, never 0."
+            )
+        else:
+            spans.append(f"{gap['from']} to {_bound(gap.get('to'), 'now')}")
+    if spans:
         notes.append(
-            f"{name}: no data from {spans}: settlement heights which are not written (settlement_gaps), not covered, "
-            "never 0."
+            f"{name}: no data from {', '.join(spans)}: settlement heights which are not written (settlement_gaps), "
+            "not covered, never 0."
         )
     return notes
 

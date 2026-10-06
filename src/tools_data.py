@@ -14,7 +14,7 @@ from src.graphql_client import (
     PocketNetworkAPIClient,
     range_notes,
 )
-from src.graphql_validator import MAX_FIRST, check_query_guards
+from src.graphql_validator import LIVE_REWARD_FIELDS, MAX_FIRST, check_query_guards
 from src.query_sub_agents import ALL_SUBAGENTS
 from src.rpc_client import (
     POCKET_NETWORK_RPC_ENDPOINT,
@@ -177,9 +177,8 @@ EXECUTE_GRAPHQL_DESCRIPTION = f"""Executes a GraphQL method call and returns the
 
 Guards, checked before the query is sent:
 - Raw payout tables (modToAcctTransfers...) are refused: use the settlement catalog (getIncomeJson, ...).
-- The live reward functions (getRewardsByAddressesAndTime..., getRewardsOfAddressesBySuppliersAndTime,
-  getRewardsBySuppliersAndTime..., getMintBreakdownBetweenDates, getBurnBreakdownBetweenDates) are refused: use
-  their legacy... twin (same arguments and JSON) or the settlement catalog.
+- The live reward functions ({", ".join(LIVE_REWARD_FIELDS)}) are refused:
+  use their legacy... twin (same arguments) or the settlement catalog.
 - Every connection that selects "nodes" or "edges" needs a literal "first" between 1 and {MAX_FIRST}.
 A result longer than {MAX_RESULT_CHARS} characters is cut, and the error string says so.
 
