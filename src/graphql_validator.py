@@ -39,6 +39,26 @@ LIVE_REWARD_FIELDS = (
     "getMintBreakdownBetweenDates",
     "getBurnBreakdownBetweenDates",
 )
+# The settlement catalog functions, as GraphQL names: pocketdex CATALOG_FUNCTIONS
+# (src/mappings/dbFunctions/settlement/functions.ts). Each has a ...List row variant and a ...Json twin.
+CATALOG_FUNCTIONS = frozenset(
+    {
+        "moneyCoverage",
+        "getApplicationSpend",
+        "getGatewaySpend",
+        "getSupplierEarnings",
+        "getSupplierDistribution",
+        "getIncome",
+        "getValidatorRewards",
+        "getDelegatorIncome",
+        "getSupplyFlows",
+        "getSupplierPenalties",
+        "getServiceUsage",
+        "getAppAutoUnstakes",
+        "getSupplierProofs",
+        "getParamHistory",
+    }
+)
 # Largest page a connection may ask for; the API caps a connection at this many rows without saying so.
 MAX_FIRST = 1000
 # Most fields the guards visit in one query. Fragments spread in nested fields multiply the visits (2^n for n nested
@@ -87,7 +107,7 @@ def _check_field(
     name = field.name.value
     if name.startswith(RAW_FIELD_PREFIXES):
         return f'"{name}" reads a raw payout table and is not allowed: {RAW_FIELD_HINT}.'
-    if name.endswith("List") and f"{name[: -len('List')]}Json" in GRAPHQL_REGISTRY:
+    if name.endswith("List") and name[: -len("List")] in CATALOG_FUNCTIONS:
         # The row variant of a settlement catalog function: once pocketdex answers a range it does not cover with
         # what it has, no rows cannot tell "not covered" from "nothing happened".
         return (

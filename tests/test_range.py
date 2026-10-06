@@ -184,7 +184,7 @@ class TestRangeNotes(unittest.TestCase):
         }
         notes = range_notes({"x": value})
         self.assertIn("x: data since 2026-09-02T00:00:00+00:00 (requested from the start)", notes[0])
-        self.assertIn("x: data until 2026-09-02T06:00:00+00:00, excluded (requested to now)", notes[1])
+        self.assertIn("x: data until 2026-09-02T06:00:00+00:00 (requested to now)", notes[1])
         gap = {"range": {**COVERED["range"], "gaps": [{"from": "2026-09-02T05:00:00+00:00", "to": None}]}, "data": 1}
         self.assertIn("no data from 2026-09-02T05:00:00+00:00 to now", range_notes({"x": gap})[0])
 
@@ -204,16 +204,12 @@ class TestRangeNotes(unittest.TestCase):
 
     def test_the_end_is_said_included_or_excluded(self):
         short = {**COVERED["range"], "covered_to": "2026-09-02T05:00:00+00:00"}
-        for name, flag, word in (
-            ("legacyRewardsByAddressesAndTime", None, "included"),  # no flag: legacy... includes its end
-            ("getIncomeJson", None, "excluded"),
-            ("x", True, "included"),  # the flag wins over the name
-            ("legacyX", False, "excluded"),
-        ):
-            with self.subTest(name=name, flag=flag):
+        for flag, said in ((True, ", included ("), (False, ", excluded ("), (None, " (")):
+            with self.subTest(flag=flag):
+                # Without the flag nothing is said: the name does not decide it (an alias hides it).
                 range_ = short if flag is None else {**short, "end_inclusive": flag}
-                (note,) = range_notes({name: {"range": range_, "data": 1}})
-                self.assertIn(f"data until 2026-09-02T05:00:00+00:00, {word}", note)
+                (note,) = range_notes({"legacyX": {"range": range_, "data": 1}})
+                self.assertIn(f"data until 2026-09-02T05:00:00+00:00{said}", note)
 
     def test_bounds_without_a_zone_are_utc(self):
         value = {"range": {**COVERED["range"], "requested_from": "2026-09-01T00:00:00"}, "data": COVERED["data"]}

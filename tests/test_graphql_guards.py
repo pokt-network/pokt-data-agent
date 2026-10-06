@@ -6,6 +6,7 @@ from graphql import GraphQLError, parse
 
 from src.graphql_client import GRAPHQL_REGISTRY
 from src.graphql_validator import (
+    CATALOG_FUNCTIONS,
     LIVE_REWARD_FIELDS,
     MAX_FIRST,
     MAX_VISITED_FIELDS,
@@ -13,6 +14,25 @@ from src.graphql_validator import (
     validate_graphql_query,
 )
 from src.tools_data import MAX_RESULT_CHARS, execute_graphql
+
+# Mirror of pocketdex CATALOG_FUNCTIONS (src/mappings/dbFunctions/settlement/functions.ts, branch
+# feat/money-range-in-response at 2e88668). Update both when pocketdex adds or drops a catalog function.
+POCKETDEX_CATALOG_FUNCTIONS = [
+    "money_coverage",
+    "get_application_spend",
+    "get_gateway_spend",
+    "get_supplier_earnings",
+    "get_supplier_distribution",
+    "get_income",
+    "get_validator_rewards",
+    "get_delegator_income",
+    "get_supply_flows",
+    "get_supplier_penalties",
+    "get_service_usage",
+    "get_app_auto_unstakes",
+    "get_supplier_proofs",
+    "get_param_history",
+]
 
 
 def guard(query):
@@ -46,6 +66,10 @@ class TestQueryGuards(unittest.TestCase):
                     error = guard(query)
                     self.assertIn(f'"{name}" scans the raw payout tables', error)
                     self.assertIn(f"use {legacy} (same arguments and JSON", error)
+
+    def test_catalog_functions_mirror_pocketdex(self):
+        camel = {n.split("_")[0] + "".join(w.title() for w in n.split("_")[1:]) for n in POCKETDEX_CATALOG_FUNCTIONS}
+        self.assertEqual(CATALOG_FUNCTIONS, camel)
 
     def test_catalog_row_variants_are_refused(self):
         for query in (

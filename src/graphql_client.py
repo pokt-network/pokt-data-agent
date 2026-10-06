@@ -266,17 +266,12 @@ def _ranged_fields(result: Any) -> List[Tuple[str, Any, dict]]:
     return fields
 
 
-def _end_inclusive(name: str, range_: dict) -> bool:
-    """legacy... ranges include their end (end_date); catalog ranges and gaps are half-open. pocketdex says which with
-    range.end_inclusive; without it the family is told by the field name (an alias hides it: then half-open)."""
-    flag = range_.get("end_inclusive")
-    return flag if isinstance(flag, bool) else name.startswith("legacy")
-
-
 def _field_notes(name: str, data: Any, range_: dict) -> List[str]:
     covered_from, requested_from = range_.get("covered_from"), range_.get("requested_from")
     covered_to, requested_to = range_.get("covered_to"), range_.get("requested_to")
-    end = "included" if _end_inclusive(name, range_) else "excluded"
+    # range.end_inclusive: true for legacy... (end_date included), false for the catalog; said only when sent.
+    flag = range_.get("end_inclusive")
+    end = ", included" if flag is True else ", excluded" if flag is False else ""
     notes = []
     covers_nothing = _covers_nothing(range_)
     if covers_nothing:
@@ -290,7 +285,7 @@ def _field_notes(name: str, data: Any, range_: dict) -> List[str]:
             )
         if _time(requested_to) is None or _time(covered_to) < _time(requested_to):
             notes.append(
-                f"{name}: data until {covered_to}, {end} (requested to {_bound(requested_to, 'now')}): say so with "
+                f"{name}: data until {covered_to}{end} (requested to {_bound(requested_to, 'now')}): say so with "
                 "the result; what comes after it is not covered yet, never 0."
             )
         if data is None:
