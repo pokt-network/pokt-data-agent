@@ -40,6 +40,7 @@ PARTIAL_WITH_GAP = {
         "covered_from": "2026-09-01T12:00:00+00:00",
         "covered_to": "2026-09-02T08:20:00+00:00",
         "gaps": [GAP],
+        "end_inclusive": False,
     },
     "data": [ROW],
 }
@@ -50,6 +51,7 @@ LEGACY_PARTIAL = {
         "covered_from": "2026-09-01T12:00:00+00:00",
         "covered_to": "2026-09-01T13:00:00+00:00",
         "gaps": [],
+        "end_inclusive": True,
     },
     "data": 201156529,
 }
@@ -146,7 +148,7 @@ class TestRangeNotes(unittest.TestCase):
         self.assertEqual(len(notes), 3)
         self.assertIn("getIncomeJson: data since 2026-09-01T12:00:00+00:00", notes[0])
         self.assertIn("never 0", notes[0])
-        self.assertIn("getIncomeJson: data until 2026-09-02T08:20:00+00:00", notes[1])
+        self.assertIn("getIncomeJson: data until 2026-09-02T08:20:00+00:00, excluded", notes[1])
         self.assertIn("never 0", notes[1])
         self.assertIn("no data from 2026-09-01T23:30:00+00:00 to 2026-09-02T00:00:00+00:00", notes[2])
         self.assertIn("never 0", notes[2])
@@ -172,7 +174,7 @@ class TestRangeNotes(unittest.TestCase):
 
     def test_data_null_over_a_covered_range_is_not_called_uncovered(self):
         (note,) = range_notes({"series": LEGACY_SERIES_EMPTY})
-        self.assertIn("found nothing in the covered part", note)
+        self.assertIn("no rows in a covered range", note)
         self.assertNotIn(NOT_COVERED, note)
 
     def test_unbounded_bounds_are_said_in_words(self):
@@ -182,7 +184,7 @@ class TestRangeNotes(unittest.TestCase):
         }
         notes = range_notes({"x": value})
         self.assertIn("x: data since 2026-09-02T00:00:00+00:00 (requested from the start)", notes[0])
-        self.assertIn("x: data until 2026-09-02T06:00:00+00:00 (requested to now)", notes[1])
+        self.assertIn("x: data until 2026-09-02T06:00:00+00:00, excluded (requested to now)", notes[1])
         gap = {"range": {**COVERED["range"], "gaps": [{"from": "2026-09-02T05:00:00+00:00", "to": None}]}, "data": 1}
         self.assertIn("no data from 2026-09-02T05:00:00+00:00 to now", range_notes({"x": gap})[0])
 
@@ -199,6 +201,19 @@ class TestRangeNotes(unittest.TestCase):
 
     def test_an_inverted_legacy_range_is_not_a_coverage_verdict(self):
         self.assertEqual(range_notes({"x": LEGACY_INVERTED}), [])
+
+    def test_the_end_is_said_included_or_excluded(self):
+        short = {**COVERED["range"], "covered_to": "2026-09-02T05:00:00+00:00"}
+        for name, flag, word in (
+            ("legacyRewardsByAddressesAndTime", None, "included"),  # no flag: legacy... includes its end
+            ("getIncomeJson", None, "excluded"),
+            ("x", True, "included"),  # the flag wins over the name
+            ("legacyX", False, "excluded"),
+        ):
+            with self.subTest(name=name, flag=flag):
+                range_ = short if flag is None else {**short, "end_inclusive": flag}
+                (note,) = range_notes({name: {"range": range_, "data": 1}})
+                self.assertIn(f"data until 2026-09-02T05:00:00+00:00, {word}", note)
 
     def test_bounds_without_a_zone_are_utc(self):
         value = {"range": {**COVERED["range"], "requested_from": "2026-09-01T00:00:00"}, "data": COVERED["data"]}

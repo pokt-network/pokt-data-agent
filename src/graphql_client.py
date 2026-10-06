@@ -266,9 +266,17 @@ def _ranged_fields(result: Any) -> List[Tuple[str, Any, dict]]:
     return fields
 
 
+def _end_inclusive(name: str, range_: dict) -> bool:
+    """legacy... ranges include their end (end_date); catalog ranges and gaps are half-open. pocketdex says which with
+    range.end_inclusive; without it the family is told by the field name (an alias hides it: then half-open)."""
+    flag = range_.get("end_inclusive")
+    return flag if isinstance(flag, bool) else name.startswith("legacy")
+
+
 def _field_notes(name: str, data: Any, range_: dict) -> List[str]:
     covered_from, requested_from = range_.get("covered_from"), range_.get("requested_from")
     covered_to, requested_to = range_.get("covered_to"), range_.get("requested_to")
+    end = "included" if _end_inclusive(name, range_) else "excluded"
     notes = []
     covers_nothing = _covers_nothing(range_)
     if covers_nothing:
@@ -282,11 +290,14 @@ def _field_notes(name: str, data: Any, range_: dict) -> List[str]:
             )
         if _time(requested_to) is None or _time(covered_to) < _time(requested_to):
             notes.append(
-                f"{name}: data until {covered_to} (requested to {_bound(requested_to, 'now')}): say so with the "
-                "result; what comes after it is not covered yet, never 0."
+                f"{name}: data until {covered_to}, {end} (requested to {_bound(requested_to, 'now')}): say so with "
+                "the result; what comes after it is not covered yet, never 0."
             )
         if data is None:
-            notes.append(f"{name}: data null: the function found nothing in the covered part of the range.")
+            notes.append(
+                f"{name}: data null with covered bounds: no rows in a covered range (the function found nothing "
+                "there), not a range that is not covered."
+            )
     spans = []
     for gap in range_.get("gaps") or []:
         if gap.get("from") is None:
@@ -328,10 +339,13 @@ COVERAGE_NOTE = (
     "April 2026 as of October 2026; moneyCoverageJson tells). The API answers in one of two shapes. Bare JSON: a "
     "range that starts before the data, or crosses a gap, is an error. Or "
     '{"range": {"requested_from", "requested_to", "covered_from", "covered_to", "gaps": [{"from", "to"}]}, '
-    '"data": <the same JSON>}, answered from the covered part: covered_from and covered_to null mean nothing is '
-    "covered (data is then null or []); a covered_from later than requested_from means the data starts there (say "
-    '"data since <covered_from>"), and a covered_to earlier than requested_to that it ends there; the gaps have no '
-    'data. A range or gap not covered is "not covered yet", never 0: report it so, and do not retry it.'
+    '"data": <the same JSON>}, answered from the covered part. Only covered_from and covered_to null mean nothing is '
+    "covered (data is then null for legacy..., [] for ...Json). data null with covered bounds is no rows in a "
+    "covered range (a legacy... series that found nothing), not a range that is not covered. A covered_from later "
+    'than requested_from means the data starts there (say "data since <covered_from>"), and a covered_to earlier '
+    "than requested_to that it ends there. legacy... ranges include their end (end_date); ...Json ranges and gaps "
+    "are [from, to), the end excluded; range.end_inclusive says which when present. The gaps have no data. A range "
+    'or gap not covered is "not covered yet", never 0: report it so, and do not retry it.'
 )
 CATALOG_NOTES = {
     "rangeStart/rangeEnd": "The range [start, end) in UTC with an explicit zone, e.g. 2026-10-01T00:00:00Z. Pass both.",

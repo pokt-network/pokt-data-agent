@@ -187,8 +187,9 @@ A result longer than {MAX_RESULT_CHARS} characters is cut, and the error string 
 The settlement catalog and legacy... functions either raise an error for a range their data does not cover yet,
 or answer {{"range": {{requested_from, requested_to, covered_from, covered_to, gaps}}, "data": ...}} from the covered
 part; then the error string says from and until when the data is and which gaps it has, and an answer that covers
-nothing fails like the error. covered_from null means not covered, never 0. Report what is not covered as "not
-covered yet", never as 0.
+nothing fails like the error. Only covered_from/covered_to null mean not covered, never 0; data null with covered
+bounds means no rows in a covered range. legacy... ranges include their end, ...Json ranges and gaps exclude it
+(range.end_inclusive says which). Report what is not covered as "not covered yet", never as 0.
 
 Args:
     query: GraphQL query string to be wrapped into "{{"query": query}}" and posted to the endpoint.
