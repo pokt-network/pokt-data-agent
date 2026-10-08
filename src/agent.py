@@ -8,6 +8,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
+from src.graphql_client import final_error_reply
 from src.query_sub_agents import create_sub_agents
 
 logger = logging.getLogger(__name__)
@@ -195,6 +196,10 @@ Obtained data:
             error_message = "The query did not match any of the following agents:\n" + agents_list_text
         elif error == self.AGENT_CANNOT_BUILD:
             error_message = state.get("agent_notes", "")
+        elif final_error_reply(error):
+            # A range not covered yet, or a limit the question exceeds: no other query answers it, and an uncovered
+            # range must never be reported as zero.
+            return {"agent_notes": final_error_reply(error)}
         elif error and "GraphQL validation error" in error:
             logger.warning("Validation error reached format_refusal: %s", error)
             return {"agent_notes": "Internal error `SA1`, please retry."}

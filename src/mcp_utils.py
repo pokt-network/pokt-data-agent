@@ -37,7 +37,7 @@ def create_mcp_server(
         case "sub-agents":
             server_tools = AGENTS_AS_TOOLS[1:]
         case "main-agent":
-            server_tools = AGENTS_AS_TOOLS[1]
+            server_tools = [AGENTS_AS_TOOLS[0]]
         case "all-agents":
             server_tools = AGENTS_AS_TOOLS
         case "everything":

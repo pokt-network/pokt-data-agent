@@ -28,3 +28,6 @@ jobs:
 
       - name: Run ruff format
         run: uv run ruff format --check .
+
+      - name: Run unit tests
+        run: uv run python -m unittest discover -s tests -t .

@@ -2,7 +2,9 @@
 
 import json
 import os
-from typing import Any, Tuple
+import re
+from datetime import datetime, timezone
+from typing import Any, List, Tuple
 
 import requests
 
@@ -11,6 +13,17 @@ from src.models import QueryFieldInfo
 POCKET_NETWORK_DATA_ENDPOINT = os.getenv("POCKET_NETWORK_DATA_ENDPOINT", None)
 if POCKET_NETWORK_DATA_ENDPOINT is None:
     raise ValueError('The "POCKET_NETWORK_DATA_ENDPOINT" enviroment variable is not set.')
+
+
+# Longest raw (non-GraphQL) error body passed on, in characters.
+MAX_RAW_ERROR_CHARS = 2000
+
+
+def _graphql_errors(errors: list) -> str:
+    """The messages of a GraphQL "errors" list: the API adds a stack trace and the internal SQL in "extensions"."""
+    return "GraphQL errors: " + "; ".join(
+        [err.get("message", str(err)) if isinstance(err, dict) else str(err) for err in errors]
+    )
 
 
 class PocketNetworkAPIClient:
@@ -51,10 +64,13 @@ class PocketNetworkAPIClient:
 
             # Check for GraphQL errors
             if "errors" in data and data["errors"]:
-                error_msg = "GraphQL errors: " + "; ".join([str(err) for err in data["errors"]])
-                return False, None, error_msg
+                return False, None, _graphql_errors(data["errors"])
 
             if "data" in data:
+                # A {range, data} answer that covers nothing fails as the API's coverage error did before the range.
+                not_covered = not_covered_error(data["data"])
+                if not_covered:
+                    return False, None, not_covered
                 return True, data["data"], None
             else:
                 return False, None, "No data returned from API"
@@ -64,10 +80,17 @@ class PocketNetworkAPIClient:
         except requests.exceptions.ConnectionError:
             return False, None, "Connection error to API. Please check the endpoint."
         except requests.exceptions.HTTPError as e:
+            # A query the API cannot validate comes back as HTTP 400 with a GraphQL {"errors": [...]} body.
+            try:
+                body = e.response.json()
+            except ValueError:
+                body = None
+            if isinstance(body, dict) and body.get("errors"):
+                return False, None, _graphql_errors(body["errors"])
             return (
                 False,
                 None,
-                f"HTTP error: {e.response.status_code} - {e.response.text}",
+                f"HTTP error: {e.response.status_code} - {e.response.text[:MAX_RAW_ERROR_CHARS]}",
             )
         except requests.exceptions.RequestException as e:
             return False, None, f"Request error: {str(e)}"
@@ -76,6 +99,257 @@ class PocketNetworkAPIClient:
         except Exception as e:
             return False, None, f"Unexpected error: {str(e)}"
 
+
+# Said for an answer in the {range, data} shape that covers nothing of the range: what the API raised before it
+# answered with the range.
+NOT_COVERED = "no indexed data covers this range"
+# Said for the leading gap of a {range, data} answer: the history the history job has not written yet.
+HISTORY_NOT_INDEXED = "the settlement history before it is not indexed yet"
+# Errors of the settlement functions for a range their tables do not cover (pocketdex _check_coverage). The answer is
+# "not covered yet": another query cannot fix it.
+COVERAGE_ERRORS = (
+    NOT_COVERED,
+    "no settlement height is written yet",
+    "before the first written settlement",
+    "which are not written (settlement_gaps)",
+    "run rebuild_rollups first",
+)
+# Errors that a corrected query fixes: a field or argument the schema does not have, or a catalog argument out of its
+# bounds (pocketdex _validate and the catalog functions); each message says what to change. Of the list-size limits
+# (LIST_LIMIT, TOP_LIMIT) only an empty list or N below 1: above the maximum a model "fixes" them by dropping ids or
+# lowering N, and then reports a partial total as the full one (final_error_reply ends the run instead).
+FIXABLE_QUERY_ERRORS = (
+    "Cannot query field",
+    "Unknown argument",
+    "Unknown type",
+    "is not defined by type",
+    "of required type",
+    "must have a selection of subfields",
+    "must not have a selection",
+    "Expected value of type",
+    "invalid bucket",
+    "allows ranges up to",
+    "range_start must be earlier than range_end",
+    "pass suppliers or owners",
+    "pass services, top_by_settled",
+)
+
+
+def is_coverage_error(error: str | None) -> bool:
+    """True when the API refused a range the settlement tables do not cover yet."""
+    return bool(error) and any(marker in error for marker in COVERAGE_ERRORS)
+
+
+LIST_LIMIT = re.compile(r"(\w+) must have between 1 and (\d+) elements \(has (\d+)\)")
+TOP_LIMIT = re.compile(r"top_by_settled must be between 1 and (\d+) \(is (-?\d+)\)")
+
+
+def final_error_reply(error: str | None) -> str | None:
+    """What to tell the user for an error that no other query fixes, or None for any other error.
+
+    A range the settlement tables do not cover has no number to report: the reply must never present it as zero.
+    """
+    if not error:
+        return None
+    # First: a {range, data} answer that covers nothing because it lies in a gap says both (the API errors never do).
+    if "which are not written (settlement_gaps)" in error:
+        return (
+            "Not covered yet: this range overlaps settlement heights that are not written yet (a gap), so there is no "
+            f"number to report for it. Try a range outside the gap, or again later. Details: {error}"
+        )
+    if (
+        "before the first written settlement" in error
+        or "no settlement height is written yet" in error
+        or HISTORY_NOT_INDEXED in error
+    ):
+        return (
+            "Not covered yet: the settlement data for this range is not indexed yet, so there is no number to report "
+            f"for it. Try a more recent range. Details: {error}"
+        )
+    # Nothing covered, and nothing says on which side: before the data, or after the latest indexed block.
+    if NOT_COVERED in error:
+        return (
+            "Not covered yet: no indexed data covers this range yet, so there is no number to report for it. "
+            f"Details: {error}"
+        )
+    if "run rebuild_rollups first" in error:
+        return (
+            "Not available right now: the settlement summary tables are being rebuilt, so there is no number to "
+            "report for this range yet. Try again later."
+        )
+    # An empty list or a top below 1 is retried first (is_fixable_query_error); it reaches here when the retries could
+    # not fill it, e.g. a question with no address.
+    match = LIST_LIMIT.search(error)
+    if match and int(match.group(3)) < 1:
+        return f"The question needs at least one of the {match.group(1)} to look up."
+    if match and int(match.group(3)) > int(match.group(2)):
+        name, limit, count = match.group(1), match.group(2), match.group(3)
+        return (
+            f"Too many {name}: {count}, the limit is {limit} per question. Split the question into groups of at most "
+            f"{limit} and add the results."
+        )
+    match = TOP_LIMIT.search(error)
+    if match and int(match.group(2)) < 1:
+        return "Say how many of the top services to rank (at least one)."
+    if match and int(match.group(2)) > int(match.group(1)):
+        return f"At most the top {match.group(1)} services can be ranked per question (asked for {match.group(2)})."
+    return None
+
+
+def _is_fixable_limit_error(error: str) -> bool:
+    """An empty list or a top_by_settled below 1: a corrected query adds what is missing, it drops nothing."""
+    match = LIST_LIMIT.search(error)
+    if match and int(match.group(3)) < 1:
+        return True
+    match = TOP_LIMIT.search(error)
+    return bool(match) and int(match.group(2)) < 1
+
+
+def is_fixable_query_error(error: str | None) -> bool:
+    """True when the API refused the query itself, so that a corrected query may succeed."""
+    return (
+        bool(error)
+        and not is_coverage_error(error)
+        and (any(marker in error for marker in FIXABLE_QUERY_ERRORS) or _is_fixable_limit_error(error))
+    )
+
+
+def unwrap_range(value: Any) -> Tuple[Any, dict | None]:
+    """Split the answer of a settlement function into (data, range).
+
+    pocketdex answers either with the bare JSON (and raises for a range it does not cover), or with
+    {"range": {requested_from, requested_to, covered_from, covered_to, gaps}, "data": <the same JSON>}, where
+    covered_from and covered_to are None when nothing in the range is covered (data is then None or []). The JSON
+    arrives parsed; the old BigFloat totals arrive as strings.
+    """
+    if isinstance(value, dict) and "data" in value and isinstance(value.get("range"), dict):
+        return value["data"], value["range"]
+    return value, None
+
+
+def _time(value: Any) -> datetime | None:
+    """A range bound as a UTC datetime (a bound without a zone is UTC), or None."""
+    try:
+        parsed = datetime.fromisoformat(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=timezone.utc) if parsed and parsed.tzinfo is None else parsed
+
+
+def _covers_nothing(range_: dict) -> bool:
+    """Nothing in the range is covered: the covered bounds are None (or, from an earlier pocketdex, inverted).
+
+    data None alone does not say it: a legacy date series over a covered range with no rows is None too. Nor do None
+    bounds over an inverted requested range: a legacy function then answers the live function's empty answer (it
+    matches nothing), which is not a coverage verdict.
+    """
+    requested_from, requested_to = _time(range_.get("requested_from")), _time(range_.get("requested_to"))
+    if requested_from is not None and requested_to is not None and requested_from > requested_to:
+        return False
+    covered_from, covered_to = _time(range_.get("covered_from")), _time(range_.get("covered_to"))
+    return covered_from is None or covered_to is None or covered_from > covered_to
+
+
+def _bound(value: Any, unbounded: str) -> str:
+    return unbounded if value is None else str(value)
+
+
+def _ranged_fields(result: Any) -> List[Tuple[str, Any, dict]]:
+    """(field or alias, data, range) of each field of a GraphQL result that answers in the {range, data} shape."""
+    if not isinstance(result, dict):
+        return []
+    fields = []
+    for name, value in result.items():
+        data, range_ = unwrap_range(value)
+        if range_ is not None:
+            fields.append((name, data, range_))
+    return fields
+
+
+def _field_notes(name: str, data: Any, range_: dict) -> List[str]:
+    covered_from, requested_from = range_.get("covered_from"), range_.get("requested_from")
+    covered_to, requested_to = range_.get("covered_to"), range_.get("requested_to")
+    # range.end_inclusive: true for legacy... (end_date included), false for the catalog; said only when sent.
+    flag = range_.get("end_inclusive")
+    end = ", included" if flag is True else ", excluded" if flag is False else ""
+    notes = []
+    covers_nothing = _covers_nothing(range_)
+    if covers_nothing:
+        notes.append(f"{name}: {NOT_COVERED}, so it has no number to report: say not covered yet, never 0.")
+    elif _time(covered_from) is not None and _time(covered_to) is not None:
+        # A NULL requested bound asked for all the data on that side.
+        if _time(requested_from) is None or _time(covered_from) > _time(requested_from):
+            notes.append(
+                f"{name}: data since {covered_from} (requested from {_bound(requested_from, 'the start')}): say so "
+                "with the result; what comes before it is not covered yet, never 0."
+            )
+        if _time(requested_to) is None or _time(covered_to) < _time(requested_to):
+            notes.append(
+                f"{name}: data until {covered_to}{end} (requested to {_bound(requested_to, 'now')}): say so with "
+                "the result; what comes after it is not covered yet, never 0."
+            )
+        if data is None:
+            notes.append(
+                f"{name}: data null with covered bounds: no rows in a covered range (the function found nothing "
+                "there), not a range that is not covered."
+            )
+    spans = []
+    for gap in range_.get("gaps") or []:
+        if gap.get("from") is None:
+            # The leading gap: the history before the first written settlement, which the history job fills. With
+            # data, "data since" already says it.
+            if covers_nothing:
+                notes.append(f"{name}: no data before {gap.get('to')}: {HISTORY_NOT_INDEXED}, not covered, never 0.")
+        else:
+            spans.append(f"{gap['from']} to {_bound(gap.get('to'), 'now')}")
+    if spans:
+        notes.append(
+            f"{name}: no data from {', '.join(spans)}: settlement heights which are not written (settlement_gaps), "
+            "not covered, never 0."
+        )
+    return notes
+
+
+def range_notes(result: Any) -> List[str]:
+    """What the answer must say about the part of the range each field covers; empty for the bare-JSON shape."""
+    return [note for name, data, range_ in _ranged_fields(result) for note in _field_notes(name, data, range_)]
+
+
+def not_covered_error(result: Any) -> str | None:
+    """The coverage error for a result whose every field is in the {range, data} shape and covers nothing, else None.
+
+    Whatever data such a field carries (a legacy by-service list of zeros, the zero mint object) is not a number to
+    report, so the answer fails as the API's coverage error did.
+    """
+    fields = _ranged_fields(result)
+    if not fields or len(fields) < len(result) or not all(_covers_nothing(r) for _, _, r in fields):
+        return None
+    return "Settlement range: " + " ".join(note for field in fields for note in _field_notes(*field))
+
+
+# Rules shared by the settlement catalog functions (get...Json, moneyCoverageJson), which read precomputed
+# settlement tables: fast, but they cover settlements from a starting height only and cap the range per bucket.
+COVERAGE_NOTE = (
+    "The settlement data starts at a height that moves back toward genesis while the history is filled (mainnet: "
+    "April 2026 as of October 2026; moneyCoverageJson tells). The API answers in one of two shapes. Bare JSON: a "
+    "range that starts before the data, or crosses a gap, is an error. Or "
+    '{"range": {"requested_from", "requested_to", "covered_from", "covered_to", "gaps": [{"from", "to"}]}, '
+    '"data": <the same JSON>}, answered from the covered part. Only covered_from and covered_to null mean nothing is '
+    "covered (data is then null for legacy..., [] for ...Json). data null with covered bounds is no rows in a "
+    "covered range (a legacy... series that found nothing), not a range that is not covered. A covered_from later "
+    'than requested_from means the data starts there (say "data since <covered_from>"), and a covered_to earlier '
+    "than requested_to that it ends there. legacy... ranges include their end (end_date); ...Json ranges and gaps "
+    "are [from, to), the end excluded; range.end_inclusive says which when present. The gaps have no data. A range "
+    'or gap not covered is "not covered yet", never 0: report it so, and do not retry it.'
+)
+CATALOG_NOTES = {
+    "rangeStart/rangeEnd": "The range [start, end) in UTC with an explicit zone, e.g. 2026-10-01T00:00:00Z. Pass both.",
+    "bucket": "Omit for one total per row, or hour (range up to 7 days), day (up to 92 days), week (up to 366 days), month or year. A range longer than the bucket allows is an error that names the bucket to use.",
+    "coverage": COVERAGE_NOTE,
+    "result": 'A JSON array of rows (in "data" in the {range, data} shape) with snake_case keys; amounts and counts are strings (upokt). "all" in a column means the rows are not split by it. Within a covered range, a missing row means 0.',
+}
+# The legacy... functions keep the arguments and JSON of the functions they replace, read from the same tables.
+LEGACY_NOTES = {"coverage": COVERAGE_NOTE}
 
 # Registry of available GraphQL query fields with descriptions
 GRAPHQL_REGISTRY = {
@@ -138,46 +412,6 @@ GRAPHQL_REGISTRY = {
             "claimedAmount": "Total upokt requested by the supplier that should be burnt from the application",
         },
     ),
-    "relayByBlockAndServices": QueryFieldInfo(
-        name="relayByBlockAndServices",
-        description="Query relay data grouped by services with aggregates (claimedUpokt, computedUnits, relays). Usefull to explore the traffic on services at anetwork level.",
-        fields_notes={
-            "relays": "Number of relays performed.",
-            "computedUnits": "Number of CUs claimed by suppliers",
-            "claimedUpokt": "Total upokt requested by suppliers.",
-        },
-        examples=[
-            "# Per-service traffic totals in a time window (grouped aggregates)\n"
-            "query { relayByBlockAndServices(filter: {block: {timestamp: "
-            '{greaterThanOrEqualTo: "2026-06-10T00:00:00Z", lessThan: "2026-06-11T00:00:00Z"}}}) '
-            "{ groupedAggregates(groupBy: SERVICE_ID) { keys sum { relays estimatedRelays computedUnits "
-            "estimatedComputedUnits claimedUpokt } } } }",
-        ],
-    ),
-    "getMintBreakdownBetweenDates": QueryFieldInfo(
-        name="getMintBreakdownBetweenDates",
-        description="Provides information on the minting, inflation, reinbourcements, etc. for the whole network in a period. These correspond to the Token Logic Modules implemented in the network.",
-        fields_notes={
-            "reimbursement": "Total upokt that suppliers claim for reinbourcement. This is used to offset the network global inflation.",
-            "inflation": "Total upokt minted on top of the min/burn due to the network global inflation parameter.",
-            "mint_burn": 'Total upokt requested to be minted in exchange for service. Note that the total amount burned is not this one, it depends on the network "mint_ratio" parameter.',
-        },
-    ),
-    "getBurnBreakdownBetweenDates": QueryFieldInfo(
-        name="getBurnBreakdownBetweenDates",
-        description="Provides information on the burning for the whole network in a period.",
-        fields_notes={
-            "burn_mint": 'Total upokt to be burned in exchange for service. Note that the total amount minted is not this one, it depends on the network "mint_ratio" parameter.'
-        },
-    ),
-    "modToAcctTransfers": QueryFieldInfo(
-        name="modToAcctTransfers",
-        description='Tracks the rewards payed out by the network. This will provide exact earnings of an account (recipient) with maximum granularity, use this when other queries do not provide enough granularity or you need data for an specific block (otherwise look for "getRewardsByAddress..." methods).',
-        fields_notes={
-            "amount": "Total upokt transfered.",
-            "recipient": "Entity receiving the tokens, a pokt address.",
-        },
-    ),
     "msgStakeApplications": QueryFieldInfo(
         name="msgStakeApplications",
         description="Provides data for Applications staking events, these are usefull to track if/when an app was staked and also to see when it was loaded with more tokens for requesting traffic (stake tokens are burned due to traffic so they must re-stake from time to time).",
@@ -216,7 +450,7 @@ GRAPHQL_REGISTRY = {
             "# Latest values of specific params in a namespace\n"
             'query { params(filter: {namespace: {equalTo: "shared"}, key: {in: ["claim_window_open_offset_blocks", '
             '"claim_window_close_offset_blocks", "proof_window_close_offset_blocks"]}}, orderBy: [BLOCK_ID_DESC], '
-            "distinct: [NAMESPACE, KEY]) { nodes { key value blockId } } }",
+            "distinct: [NAMESPACE, KEY], first: 100) { nodes { key value blockId } } }",
         ],
     ),
     "blocks": QueryFieldInfo(
@@ -231,7 +465,7 @@ GRAPHQL_REGISTRY = {
             "# Latest block with network-wide snapshot fields (staked actors, supply, relays)\n"
             "query { blocks(orderBy: ID_DESC, first: 1) { nodes { height: id hash timestamp totalTxs totalRelays "
             "totalComputedUnits stakedValidators stakedSuppliers stakedSuppliersTokens stakedApps stakedAppsTokens "
-            "stakedGateways timeToBlock size supplies { nodes { supply { denom amount } } } } } }",
+            "stakedGateways timeToBlock size supplies(first: 10) { nodes { supply { denom amount } } } } } }",
             "# Network totals and averages over a time window (aggregates over blocks)\n"
             'query { blocks(filter: {timestamp: {greaterThanOrEqualTo: "2026-06-10T00:00:00Z", '
             'lessThanOrEqualTo: "2026-06-11T00:00:00Z"}}) { aggregates { sum { totalRelays totalEstimatedRelays '
@@ -266,7 +500,7 @@ GRAPHQL_REGISTRY = {
             "relayMiningDifficultyUpdatedEvents(orderBy: BLOCK_ID_DESC, first: 1) { nodes { newNumRelaysEma } } } } }",
             "# Fuzzy search services by id or name\n"
             'query { services(filter: {or: [{id: {includesInsensitive: "eth"}}, '
-            '{name: {includesInsensitive: "eth"}}]}) { nodes { id name } } }',
+            '{name: {includesInsensitive: "eth"}}]}, first: 20) { nodes { id name } } }',
         ],
     ),
     "suppliers": QueryFieldInfo(
@@ -324,9 +558,9 @@ GRAPHQL_REGISTRY = {
             "# Current supply breakdown and total supply (one snapshot)\n"
             'query { getSupplyCompositionBetweenDates(startDate: "2026-06-24T00:00:00Z", '
             'endDate: "2026-06-25T00:00:00Z", truncInterval: "day") }',
-            "# Efficiently get the supply breakdown AND total supply across several years\n"
+            "# Supply breakdown AND total supply over the last 12 months\n"
             "# in monthly intervals with a single query (one point per month, not per day)\n"
-            'query { getSupplyCompositionBetweenDates(startDate: "2023-01-01T00:00:00Z", '
+            'query { getSupplyCompositionBetweenDates(startDate: "2025-06-25T00:00:00Z", '
             'endDate: "2026-06-25T00:00:00Z", truncInterval: "month") }',
         ],
     ),
@@ -349,7 +583,7 @@ GRAPHQL_REGISTRY = {
     ),
     "getClaimProofsDataByDelegatorsAndTime": QueryFieldInfo(
         name="getClaimProofsDataByDelegatorsAndTime",
-        description='Fast method for retrieving rewards received by an address or group of them in the given time with granularity, result returned per-address. The "delegators" in the name are supplier rev_share addresses: addresses configured in a supplier\'s rev_share that receive a share of its reward tokens (NOT validator/consensus delegators, nor owners of the stake).',
+        description='Claims created, claims settled (proofs) and claims expired, in relays, compute units and upokt, of the suppliers whose current rev_share includes the given addresses, in the given time with granularity. It does NOT return the rewards the addresses received: use getIncomeJson for that. The "delegators" in the name are supplier rev_share addresses: addresses configured in a supplier\'s rev_share that receive a share of its reward tokens (NOT validator/consensus delegators, nor owners of the stake).',
         fields_notes={
             "addresses": 'A vector of supplier rev_share addresses to query: ["pokt1....", "pokt1...."]. These are the addresses receiving reward tokens from suppliers.',
         },
@@ -358,33 +592,6 @@ GRAPHQL_REGISTRY = {
             'query { getClaimProofsDataByDelegatorsAndTime(addresses: ["pokt1..."], '
             'startTs: "2026-06-01T00:00:00Z", endTs: "2026-06-11T00:00:00Z", truncInterval: "day") }',
         ],
-    ),
-    "getRewardsByAddressesAndTimeGroupByService": QueryFieldInfo(
-        name="getRewardsByAddressesAndTimeGroupByService",
-        description="Fast method for retrieving rewards received by an address or group of them, dividing the total rewards per service. Usefull for tracking which service is providing most gains.",
-        fields_notes={
-            "addresses": 'A vector of the rev-share addresses (the ones receiving tokens) to query: ["pokt1....", "pokt1...."].',
-        },
-        examples=[
-            "# Rewards of a group of rev-share addresses (the ones receiving tokens) broken down by service\n"
-            'query { getRewardsByAddressesAndTimeGroupByService(addresses: ["pokt1..."], '
-            'startTs: "2026-06-01T00:00:00Z", endTs: "2026-06-11T00:00:00Z") }',
-        ],
-    ),
-    "getRewardsBySuppliersAndTimeGroupByAddressAndDate": QueryFieldInfo(
-        name="getRewardsBySuppliersAndTimeGroupByAddressAndDate",
-        description="Fast method for retrieving rewards received by an address or group of them, from an specific group of suppliers, in the given time with granularity. Usefull for tracking the amount of rewards that an output address received from the selected suppliers.",
-        fields_notes={
-            "addresses": 'A vector of addresses to query: ["pokt1....", "pokt1...."]. These should be output addresses of the suppliers, i.e. their rev-share addresses (the ones receiving tokens from those suppliers).',
-            "supplierAddresses": 'A vector of addresses to query: ["pokt1....", "pokt1...."]. These are the suppliers that are providing rewards to the "addresses".',
-        },
-    ),
-    "getRewardsBySuppliersAndTimeGroupByService": QueryFieldInfo(
-        name="getRewardsBySuppliersAndTimeGroupByService",
-        description="Fast method for retrieving rewards received by a group of suppliers, dividing the total rewards per service. Usefull for tracking which service is providing most gains to a supplier (track service performance for operator).",
-        fields_notes={
-            "operatorAddresses": 'A vector of addresses to query: ["pokt1....", "pokt1...."]. These are the suppliers that are providing rewards. They are the address that own the suppliers, not the output addresses.',
-        },
     ),
     "getRewardsByDomainsAndTimeGroupByService": QueryFieldInfo(
         name="getRewardsByDomainsAndTimeGroupByService",
@@ -501,7 +708,7 @@ GRAPHQL_REGISTRY = {
     ),
     "nativeTransfers": QueryFieldInfo(
         name="nativeTransfers",
-        description='Tracks native token transfers (MsgSend) between accounts. Filter by senderId and/or recipientId to get the transfer history of a wallet (who sent tokens to whom). This complements "modToAcctTransfers", which only tracks reward payouts from network modules.',
+        description="Tracks native token transfers (MsgSend) between accounts. Filter by senderId and/or recipientId to get the transfer history of a wallet (who sent tokens to whom). Reward payouts from network modules are not transfers: use getIncomeJson for them.",
         fields_notes={
             "senderId": 'The address sending the tokens (must start with "pokt1").',
             "recipientId": 'The address receiving the tokens (must start with "pokt1").',
@@ -524,7 +731,7 @@ GRAPHQL_REGISTRY = {
         },
         examples=[
             "# Single account with balances and last activity (singular point lookup)\n"
-            'query { account(id: "pokt1...") { id balances { nodes { amount denom '
+            'query { account(id: "pokt1...") { id balances(first: 10) { nodes { amount denom '
             "lastUpdatedBlock { height: id timestamp } } } } }",
         ],
     ),
@@ -544,7 +751,7 @@ GRAPHQL_REGISTRY = {
             "aggregates { sum { stakeAmount } } } }",
             "# Application detail by address (singular point lookup)\n"
             'query { application(id: "pokt1...") { id stakeAmount stakeStatus unstakingEndHeight '
-            "applicationServices { nodes { serviceId } } applicationGateways { totalCount nodes { gatewayId } } } }",
+            "applicationServices(first: 100) { nodes { serviceId } } applicationGateways(first: 100) { totalCount nodes { gatewayId } } } }",
         ],
     ),
     "gateways": QueryFieldInfo(
@@ -628,18 +835,6 @@ GRAPHQL_REGISTRY = {
             'endTimestamp: "2026-06-11T00:00:00Z", truncInterval: "day") }',
         ],
     ),
-    "getRewardsByAddressesAndTime": QueryFieldInfo(
-        name="getRewardsByAddressesAndTime",
-        description="Fast method returning the plain total rewards (upokt) received by a group of addresses in a date range, with no grouping. This is the cheapest rewards rollup; use the GroupByService / GroupByAddressAndDate variants only when a breakdown is needed.",
-        fields_notes={
-            "addresses": 'A vector of rev-share addresses (the ones receiving tokens) to query: ["pokt1....", "pokt1...."].',
-        },
-        examples=[
-            "# Total rewards of a group of rev-share addresses (the ones receiving tokens) in a date range (single number)\n"
-            'query { getRewardsByAddressesAndTime(addresses: ["pokt1..."], '
-            'startDate: "2026-06-10T00:00:00Z", endDate: "2026-06-11T00:00:00Z") }',
-        ],
-    ),
     "getProducedBlocksByValidator": QueryFieldInfo(
         name="getProducedBlocksByValidator",
         description='Returns the blocks produced by a validator since the given block id. Combine with "getMissingValidatorBlocks" to compute validator uptime.',
@@ -678,7 +873,7 @@ GRAPHQL_REGISTRY = {
         },
         examples=[
             "# All service configs of a supplier (cursor-paginated), with rev-share and endpoints\n"
-            'query { supplierServiceConfigs(filter: {supplierId: {equalTo: "pokt1..."}}) '
+            'query { supplierServiceConfigs(filter: {supplierId: {equalTo: "pokt1..."}}, first: 100) '
             "{ pageInfo { hasNextPage endCursor } nodes { serviceId revShare endpoints activatedAtId } } }",
         ],
     ),
@@ -687,7 +882,7 @@ GRAPHQL_REGISTRY = {
         description="Queries application-gateway delegation pairs. Filter by applicationId to see which gateways an application delegated to, or by gatewayId to list the applications delegating to a gateway.",
         examples=[
             "# Gateways an application has delegated to\n"
-            'query { applicationGateways(filter: {applicationId: {equalTo: "pokt1..."}}) '
+            'query { applicationGateways(filter: {applicationId: {equalTo: "pokt1..."}}, first: 100) '
             "{ nodes { gateway { id stakeAmount stakeDenom } } } }",
         ],
     ),
@@ -698,6 +893,261 @@ GRAPHQL_REGISTRY = {
             "# Applications staked for a given service\n"
             'query { applicationServices(filter: {serviceId: {equalTo: "eth"}}, first: 20) '
             "{ totalCount nodes { applicationId } } }",
+        ],
+    ),
+    # --------------------------------------------------------------------------------------------------------------
+    # Settlement catalog: precomputed settlement (money) tables. See CATALOG_NOTES for the rules every one follows.
+    # --------------------------------------------------------------------------------------------------------------
+    "getIncomeJson": QueryFieldInfo(
+        name="getIncomeJson",
+        description="Income received by any address (supplier rev_share/shareholder addresses, service owners, the DAO, validators, delegators) in a time range: one row per role, optionally split by the supplier that generated it, by service, by reason (relay / global mint) and by address. Use it for every 'how much did these addresses earn' question: totals, per service, per supplier, per day.",
+        fields_notes={
+            **CATALOG_NOTES,
+            "addresses": "Required: 1 to 200 receiving addresses.",
+            "byAddress": "true (default) = one row per address; false = one total for the whole list.",
+            "bySupplier/byService/byReason": "Split by the supplier that generated the income, by service, or by reason (family column: relay / global).",
+            "amount_upokt": "upokt received. There is one row per role (e.g. rev_share, source_owner): add the rows for the address total.",
+        },
+        examples=[
+            "# Total income of a group of addresses in a week (add the rows: one per role)\n"
+            'query { getIncomeJson(addresses: ["pokt1..."], rangeStart: "2026-09-28T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z", byAddress: false) }',
+            "# Income per service and per day\n"
+            'query { getIncomeJson(addresses: ["pokt1..."], rangeStart: "2026-09-28T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z", bucket: "day", byService: true) }',
+            "# Finest grain: per hour, per supplier and per reason (hour allows up to 7 days)\n"
+            'query { getIncomeJson(addresses: ["pokt1..."], rangeStart: "2026-10-04T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z", bucket: "hour", bySupplier: true, byReason: true) }',
+        ],
+    ),
+    "legacyRewardsByAddressesAndTimeGroupByService": QueryFieldInfo(
+        name="legacyRewardsByAddressesAndTimeGroupByService",
+        description="Rewards received by a group of addresses, split by service, with the gross rewards, relays and compute units of the claims that paid them. Same arguments and JSON as the former getRewardsByAddressesAndTimeGroupByService, read from the settlement tables; gross_rewards, relays and compute units count each claim once (the former function counted a claim once per transfer). For net income only, getIncomeJson(byService: true) is the same number.",
+        fields_notes={
+            **LEGACY_NOTES,
+            "addresses": 'A vector of the rev-share addresses (the ones receiving tokens) to query: ["pokt1....", "pokt1...."].',
+            "net_rewards": "upokt the addresses received from the service.",
+            "gross_rewards": "upokt claimed by the claims that paid the addresses.",
+        },
+        examples=[
+            "# Rewards of a group of rev-share addresses broken down by service\n"
+            'query { legacyRewardsByAddressesAndTimeGroupByService(addresses: ["pokt1..."], '
+            'startTs: "2026-09-28T00:00:00Z", endTs: "2026-10-05T00:00:00Z") }',
+        ],
+    ),
+    "legacyRewardsBySuppliersAndTimeGroupByAddressAndDate": QueryFieldInfo(
+        name="legacyRewardsBySuppliersAndTimeGroupByAddressAndDate",
+        description="Rewards received by a group of addresses from a specific group of suppliers, per address and per interval. Same arguments and JSON as the former getRewardsBySuppliersAndTimeGroupByAddressAndDate, read from the settlement tables.",
+        fields_notes={
+            **LEGACY_NOTES,
+            "addresses": 'A vector of addresses to query: ["pokt1....", "pokt1...."]. These should be output addresses of the suppliers, i.e. their rev-share addresses (the ones receiving tokens from those suppliers).',
+            "supplierAddresses": 'A vector of addresses to query: ["pokt1....", "pokt1...."]. These are the suppliers that are providing rewards to the "addresses".',
+            "truncInterval": 'Interval of each point: "hour", "day", "week", "month" (any range length).',
+        },
+        examples=[
+            "# Daily rewards an address received from given suppliers\n"
+            'query { legacyRewardsBySuppliersAndTimeGroupByAddressAndDate(addresses: ["pokt1..."], '
+            'supplierAddresses: ["pokt1..."], startDate: "2026-09-28T00:00:00Z", endDate: "2026-10-05T00:00:00Z", '
+            'truncInterval: "day") }',
+        ],
+    ),
+    "getSupplierEarningsJson": QueryFieldInfo(
+        name="getSupplierEarningsJson",
+        description="What suppliers earned: claimed and settled upokt, overservicing loss, relays, estimated relays, compute units and settled claims (with and without a proof), optionally per service, per application and per supplier. Use it for a supplier's or an operator's performance per service.",
+        fields_notes={
+            **CATALOG_NOTES,
+            "suppliers": "Supplier (operator) addresses, up to 200; omit both suppliers and owners for every supplier (then use bySupplier: false).",
+            "owners": "Owner addresses in place of suppliers: the suppliers they own now.",
+            "byService/byApplication/bySupplier": "Split by service, by application, or per supplier (bySupplier defaults to true when suppliers are given).",
+            "claimed_upokt": "upokt the suppliers claimed; settled_upokt is what was paid after overservicing.",
+        },
+        examples=[
+            "# A supplier's earnings per service in a week\n"
+            'query { getSupplierEarningsJson(suppliers: ["pokt1..."], rangeStart: "2026-09-28T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z", byService: true, bySupplier: false) }',
+            "# All suppliers of an owner, per day\n"
+            'query { getSupplierEarningsJson(owners: ["pokt1..."], rangeStart: "2026-09-28T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z", bucket: "day", bySupplier: false) }',
+        ],
+    ),
+    "getSupplierProofsJson": QueryFieldInfo(
+        name="getSupplierProofsJson",
+        description="Proof activity of suppliers: claims settled with and without a proof, proofs submitted, validated and invalid (by reason), each counted in the block of its own event. Omit suppliers (and use bySupplier: false) for the whole network.",
+        fields_notes={
+            **CATALOG_NOTES,
+            "suppliers": "Supplier addresses, up to 200; omit for every supplier.",
+            "owners": "Owner addresses in place of suppliers.",
+        },
+        examples=[
+            "# Network-wide proofs per day\n"
+            'query { getSupplierProofsJson(rangeStart: "2026-09-28T00:00:00Z", rangeEnd: "2026-10-05T00:00:00Z", '
+            'bucket: "day", bySupplier: false) }',
+        ],
+    ),
+    "getSupplierPenaltiesJson": QueryFieldInfo(
+        name="getSupplierPenaltiesJson",
+        description="Penalties of suppliers: expired claims (by reason), discarded claims and slashes, with their amounts.",
+        fields_notes={
+            **CATALOG_NOTES,
+            "suppliers": "Supplier addresses, up to 200.",
+            "owners": "Owner addresses in place of suppliers.",
+        },
+        examples=[
+            "# Expired claims, discards and slashes of a supplier, per service\n"
+            'query { getSupplierPenaltiesJson(suppliers: ["pokt1..."], rangeStart: "2026-09-28T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z", byService: true) }',
+        ],
+    ),
+    "getSupplierDistributionJson": QueryFieldInfo(
+        name="getSupplierDistributionJson",
+        description="How what a supplier generated was paid out: to each rev_share/shareholder address, the DAO, the service owner, and the stakers in one row, optionally by reason (relay / global mint).",
+        fields_notes={
+            **CATALOG_NOTES,
+            "suppliers": "Required unless owners is given: supplier addresses, up to 200.",
+            "owners": "Owner addresses in place of suppliers.",
+        },
+        examples=[
+            "# Payout split of a supplier in a week\n"
+            'query { getSupplierDistributionJson(suppliers: ["pokt1..."], rangeStart: "2026-09-28T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z") }',
+        ],
+    ),
+    "getApplicationSpendJson": QueryFieldInfo(
+        name="getApplicationSpendJson",
+        description="What applications paid (burned_upokt), the overserviced work they did not pay, reimbursements, relays, compute units and claims, optionally per service, per supplier and per application.",
+        fields_notes={
+            **CATALOG_NOTES,
+            "applications": "Required: 1 to 200 application addresses.",
+        },
+        examples=[
+            "# An application's spend per service in a week\n"
+            'query { getApplicationSpendJson(applications: ["pokt1..."], rangeStart: "2026-09-28T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z", byService: true) }',
+        ],
+    ),
+    "getGatewaySpendJson": QueryFieldInfo(
+        name="getGatewaySpendJson",
+        description="What the applications delegated to each gateway spent, by the delegation in force at each settlement, optionally per application and per service.",
+        fields_notes={
+            **CATALOG_NOTES,
+            "gateways": "Required: 1 to 200 gateway addresses.",
+        },
+        examples=[
+            "# A gateway's delegated spend per day\n"
+            'query { getGatewaySpendJson(gateways: ["pokt1..."], rangeStart: "2026-09-28T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z", bucket: "day") }',
+        ],
+    ),
+    "getServiceUsageJson": QueryFieldInfo(
+        name="getServiceUsageJson",
+        description="Network traffic and value per service from settled claims: claimed and settled upokt, overservicing loss, relays, estimated relays, compute units, estimated compute units and claims. Pass the services, or topBySettled for the N services that settled the most. Use it for 'which services are most used / most profitable' questions.",
+        fields_notes={
+            **CATALOG_NOTES,
+            "services": 'Service ids, e.g. ["eth", "base"].',
+            "topBySettled": "1 to 200: the N services that settled the most upokt (rank_by_settled). Pass services or topBySettled (or both).",
+            "settled_upokt": "upokt paid for the service after overservicing; claimed_upokt is what suppliers claimed.",
+        },
+        examples=[
+            "# Top 20 services by settled value yesterday\n"
+            'query { getServiceUsageJson(rangeStart: "2026-10-04T00:00:00Z", rangeEnd: "2026-10-05T00:00:00Z", '
+            "topBySettled: 20) }",
+            "# Daily traffic of given services\n"
+            'query { getServiceUsageJson(services: ["eth", "base"], rangeStart: "2026-09-28T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z", bucket: "day") }',
+        ],
+    ),
+    "getSupplyFlowsJson": QueryFieldInfo(
+        name="getSupplyFlowsJson",
+        description="Network supply flows from settlement: burn, relay mint (mint_equals_burn), mint_ratio_unminted, overservicing loss, global mint and reimbursement, optionally by receiving role, plus slashes. Use it for burn and mint questions.",
+        fields_notes={
+            **CATALOG_NOTES,
+            "flow": "burn = upokt burned from applications; mint_equals_burn = upokt minted for relays; global_mint = global inflation mint; reimbursement = upokt the applications are reimbursed.",
+            "byRole": "Split each flow by the role that received it.",
+        },
+        examples=[
+            "# Burn and mint flows yesterday\n"
+            'query { getSupplyFlowsJson(rangeStart: "2026-10-04T00:00:00Z", rangeEnd: "2026-10-05T00:00:00Z") }',
+        ],
+    ),
+    "legacyMintBreakdownBetweenDates": QueryFieldInfo(
+        name="legacyMintBreakdownBetweenDates",
+        description="Provides information on the minting, inflation, reinbourcements, etc. for the whole network in a period. These correspond to the Token Logic Modules implemented in the network. Same arguments and JSON as the former getMintBreakdownBetweenDates, read from the settlement tables.",
+        fields_notes={
+            **LEGACY_NOTES,
+            "reimbursement": "Total upokt that suppliers claim for reinbourcement. This is used to offset the network global inflation.",
+            "inflation": "Total upokt minted on top of the min/burn due to the network global inflation parameter.",
+            "mint_burn": 'Total upokt requested to be minted in exchange for service. Note that the total amount burned is not this one, it depends on the network "mint_ratio" parameter.',
+        },
+        examples=[
+            "# Mint breakdown of a day\n"
+            'query { legacyMintBreakdownBetweenDates(startDate: "2026-10-04T00:00:00Z", '
+            'endDate: "2026-10-05T00:00:00Z") }',
+        ],
+    ),
+    "getValidatorRewardsJson": QueryFieldInfo(
+        name="getValidatorRewardsJson",
+        description="Validator (consensus) rewards: commission, self-delegation reward, what went to delegators, the number of distributions, and the delegated stake seen per validator (average, minimum, maximum; for an APR).",
+        fields_notes={
+            **CATALOG_NOTES,
+            "validators": 'Validator operator addresses ("poktvaloper..."), up to 200; omit for every validator.',
+            "byValidator": "One row per validator; false = one total (the stake columns are then NULL).",
+        },
+        examples=[
+            "# Rewards of every validator in a week\n"
+            'query { getValidatorRewardsJson(rangeStart: "2026-09-28T00:00:00Z", rangeEnd: "2026-10-05T00:00:00Z") }',
+        ],
+    ),
+    "getDelegatorIncomeJson": QueryFieldInfo(
+        name="getDelegatorIncomeJson",
+        description="Income of validator (consensus) delegators: what they received, optionally per validator. Not supplier rev_share 'delegators' (use getIncomeJson for those).",
+        fields_notes={
+            **CATALOG_NOTES,
+            "delegators": "Delegator addresses (pokt1...), up to 200; omit for every delegator.",
+            "validators": "Keep only the income from these validators (poktvaloper...).",
+        },
+        examples=[
+            "# What a delegator received per validator in a week\n"
+            'query { getDelegatorIncomeJson(delegators: ["pokt1..."], rangeStart: "2026-09-28T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z", byValidator: true) }',
+        ],
+    ),
+    "getAppAutoUnstakesJson": QueryFieldInfo(
+        name="getAppAutoUnstakesJson",
+        description="Applications the chain unstaked because their stake fell below the minimum. Reads the indexed events, so it is not limited by the settlement coverage.",
+        fields_notes={
+            "rangeStart/rangeEnd": CATALOG_NOTES["rangeStart/rangeEnd"],
+            "bucket": CATALOG_NOTES["bucket"],
+            "applications": "Application addresses, up to 200; omit for every application.",
+        },
+        examples=[
+            "# Auto-unstaked applications per week in a quarter\n"
+            'query { getAppAutoUnstakesJson(rangeStart: "2026-07-01T00:00:00Z", rangeEnd: "2026-10-01T00:00:00Z", '
+            'bucket: "week", byApplication: false) }',
+        ],
+    ),
+    "getParamHistoryJson": QueryFieldInfo(
+        name="getParamHistoryJson",
+        description="Governance parameter history: each version of a parameter whose value differs from the previous one, with previous_value, its height and block time. Reads the indexed params, so it is not limited by the settlement coverage.",
+        fields_notes={
+            "rangeStart/rangeEnd": CATALOG_NOTES["rangeStart/rangeEnd"],
+            "namespaces/keys": 'Filter by module namespace (e.g. ["tokenomics"]) and/or key; omit for all.',
+        },
+        examples=[
+            "# Every change of the tokenomics params in a year\n"
+            'query { getParamHistoryJson(namespaces: ["tokenomics"], rangeStart: "2025-10-01T00:00:00Z", '
+            'rangeEnd: "2026-10-01T00:00:00Z") }',
+        ],
+    ),
+    "moneyCoverageJson": QueryFieldInfo(
+        name="moneyCoverageJson",
+        description="Which part of a time range the settlement catalog covers: the first and last settlement heights written in the range, the settlement heights missing, and the recorded gaps. Use it to tell the user from when data is available.",
+        fields_notes={
+            "rangeStart/rangeEnd": CATALOG_NOTES["rangeStart/rangeEnd"],
+            "gaps": "Height ranges with no settlement data written yet (not covered).",
+        },
+        examples=[
+            "# Coverage of a month\n"
+            'query { moneyCoverageJson(rangeStart: "2026-09-01T00:00:00Z", rangeEnd: "2026-10-01T00:00:00Z") }',
         ],
     ),
 }
