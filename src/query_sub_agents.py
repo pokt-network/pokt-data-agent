@@ -1029,6 +1029,7 @@ class ChainActivityAgent(QueryBuilderSubAgent):
         "blocks",
         "getBlockStatsJson",
         "accounts",
+        "balances",
         "validators",
         "getProducedBlocksByValidator",
         "getMissingValidatorBlocks",

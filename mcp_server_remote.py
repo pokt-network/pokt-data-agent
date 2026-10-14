@@ -100,6 +100,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from src.graphql_validator import live_schema
 from src.mcp_utils import create_mcp_server
 
 logging.basicConfig(level=logging.WARNING)
@@ -204,4 +205,6 @@ if __name__ == "__main__":
         f"Starting pokt-data-agent remote MCP server on http://{host}:{port}{path}",
         file=sys.stderr,
     )
+    # Load the GraphQL schema the queries are checked against now, in the background, not on the first query
+    live_schema()
     uvicorn.run(app, host=host, port=port)

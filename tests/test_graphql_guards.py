@@ -1,9 +1,11 @@
+import os
+import tempfile
 import threading
 import time
 import unittest
 from unittest import mock
 
-from graphql import GraphQLError, build_schema, parse
+from graphql import GraphQLError, build_client_schema, build_schema, introspection_from_schema, parse
 
 from src import graphql_validator
 from src.graphql_client import GRAPHQL_REGISTRY
@@ -339,16 +341,59 @@ class TestExecuteGraphqlTool(unittest.TestCase):
 SCHEMA = build_schema(
     """
     scalar JSON
-    type Query {
-      suppliers(first: Int, filter: SupplierFilter): SuppliersConnection
+    interface Node { nodeId: ID! }
+    type Query implements Node {
+      nodeId: ID!
+      suppliers(first: Int, after: String, orderBy: [SuppliersOrderBy!], filter: SupplierFilter): SuppliersConnection
+      supplier(id: String!): Supplier
       getSupplierFleetJson(owners: [String]): JSON
       getOldStats(owners: [String]): JSON @deprecated(reason: "Use getSupplierFleetJson.")
       eventClaimSettleds(first: Int): SuppliersConnection @deprecated(reason: "Use getClaimsList, live reason.")
     }
-    input SupplierFilter { id: StringFilter and: [SupplierFilter] }
+    type Supplier implements Node {
+      nodeId: ID!
+      id: String
+      ownerId: String
+      suppliersCount: Int
+      owner: Account
+      serviceConfigs(first: Int): SupplierServiceConfigsConnection
+    }
+    type Account implements Node { nodeId: ID! id: String }
+    type SupplierServiceConfig implements Node { nodeId: ID! id: String serviceId: String }
+    type PageInfo { hasNextPage: Boolean endCursor: String }
+    type SuppliersConnection {
+      totalCount: Int
+      nodes: [Supplier]
+      pageInfo: PageInfo
+      aggregates: SuppliersAggregates
+      groupedAggregates(groupBy: [SuppliersGroupBy!]!): [SuppliersAggregates!]
+    }
+    type SuppliersAggregates { keys: [String] }
+    enum SuppliersGroupBy { OWNER_ID }
+    type SupplierServiceConfigsConnection { totalCount: Int nodes: [SupplierServiceConfig] }
+    enum SuppliersOrderBy {
+      NATURAL
+      ID_ASC
+      OWNER_ID_DESC
+      SUPPLIERS_COUNT_DESC
+      PRIMARY_KEY_ASC
+      SERVICE_CONFIGS_COUNT_DESC
+      SERVICE_CONFIGS_SUM_SERVICE_ID_DESC
+      ACCOUNT_BY_OWNER_ID__ID_ASC
+    }
+    input SupplierFilter {
+      id: StringFilter
+      ownerId: StringFilter
+      owner: AccountFilter
+      serviceConfigs: SupplierToManySupplierServiceConfigFilter
+      serviceConfigsExist: Boolean
+      and: [SupplierFilter]
+      or: [SupplierFilter]
+    }
+    input AccountFilter { id: StringFilter and: [AccountFilter] }
+    input SupplierServiceConfigFilter { serviceId: StringFilter and: [SupplierServiceConfigFilter] }
+    input SupplierToManySupplierServiceConfigFilter { some: SupplierServiceConfigFilter }
     input StringFilter { equalTo: String newOperator: String }
-    type SuppliersConnection { totalCount: Int nodes: [Supplier] }
-    type Supplier { id: String ownerId: String }
     """
 )
 
@@ -385,8 +430,8 @@ class TestSchemaCheck(unittest.TestCase):
         for query, message in (
             ('{ getOldStats(owners: ["pokt1x"]) }', "Query.getOldStats is deprecated. Use getSupplierFleetJson."),
             (
-                '{ suppliers(first: 5, filter: {ownerId: {equalTo: "b"}}) { nodes { id } } }',
-                "Field 'ownerId' is not defined",
+                '{ suppliers(first: 5, filter: {stakeAmount: {equalTo: "b"}}) { nodes { id } } }',
+                "Field 'stakeAmount' is not defined",
             ),
             ("{ suppliers(first: 5) { nodes { stake } } }", "Cannot query field 'stake'"),
         ):
@@ -424,6 +469,97 @@ class TestSchemaCheck(unittest.TestCase):
         self.assertIsNone(guard(query))
         self.reset()
         self.assertIn('"id" holds "newOperator", which is not an operator', guard(query))
+
+    def test_relations_are_refused_by_type(self):
+        graphql_validator.refresh_schema()
+        for query, message in (
+            ("{ suppliers(first: 5) { nodes { id owner { id } } } }", '"owner" is a relation'),
+            ('{ supplier(id: "x") { id serviceConfigs(first: 1) { totalCount } } }', '"serviceConfigs" is a relation'),
+            (
+                "{ suppliers(first: 5) { ...F } } fragment F on SuppliersConnection { nodes { owner { id } } }",
+                '"owner"',
+            ),
+            # filters through a relation, found by their input types
+            ('{ suppliers(first: 5, filter: {owner: {id: {equalTo: "x"}}}) { totalCount } }', '"owner" filters'),
+            (
+                '{ suppliers(first: 5, filter: {serviceConfigs: {some: {serviceId: {equalTo: "eth"}}}}) '
+                "{ totalCount } }",
+                '"serviceConfigs" filters',
+            ),
+            ("{ suppliers(first: 5, filter: {serviceConfigsExist: true}) { totalCount } }", '"serviceConfigsExist"'),
+            ('{ suppliers(first: 5, filter: {and: [{owner: {id: {equalTo: "x"}}}]}) { totalCount } }', '"owner"'),
+            # the two orderBy bypasses: a count and a sum over a relation, and a sort by a related row
+            (
+                "{ suppliers(first: 5, orderBy: SERVICE_CONFIGS_COUNT_DESC) { totalCount } }",
+                "SERVICE_CONFIGS_COUNT_DESC",
+            ),
+            (
+                "{ suppliers(first: 5, orderBy: [ID_ASC, SERVICE_CONFIGS_SUM_SERVICE_ID_DESC]) { totalCount } }",
+                "SERVICE_CONFIGS_SUM_SERVICE_ID_DESC",
+            ),
+            (
+                "{ suppliers(first: 5, orderBy: ACCOUNT_BY_OWNER_ID__ID_ASC) { totalCount } }",
+                "ACCOUNT_BY_OWNER_ID__ID_ASC",
+            ),
+        ):
+            with self.subTest(query=query):
+                error = guard(query)
+                self.assertIsNotNone(error)
+                self.assertIn(message, error)
+        for query in (
+            # a column whose name reads like a relation count, the plain columns, pageInfo, an operator only the live
+            # schema has
+            "{ suppliers(first: 5, orderBy: [SUPPLIERS_COUNT_DESC, OWNER_ID_DESC, ID_ASC], filter: {and: [{id: "
+            '{newOperator: "a"}}]}) { totalCount pageInfo { hasNextPage endCursor } nodes { id ownerId } } }',
+            '{ supplier(id: "x") { id ownerId } }',
+        ):
+            with self.subTest(query=query):
+                self.assertIsNone(guard(query))
+
+    def test_relation_orderings_before_the_schema_loads(self):
+        # the fallback refuses sorts by a related row and sums over a relation; counts read like a column
+        for order in ("SERVICE_CONFIGS_SUM_SERVICE_ID_DESC", "ACCOUNT_BY_OWNER_ID__ID_ASC"):
+            with self.subTest(order=order):
+                self.assertIn(
+                    "which is not one of its own columns",
+                    guard(f"{{ suppliers(first: 5, orderBy: {order}) {{ totalCount }} }}"),
+                )
+        self.assertIsNone(guard("{ suppliers(first: 5, orderBy: SUPPLIERS_COUNT_DESC) { totalCount } }"))
+
+    def test_pruned_introspection_drops_aggregates_and_relation_orderings(self):
+        pruned = build_client_schema(graphql_validator.prune_introspection(introspection_from_schema(SCHEMA)))
+        self.assertNotIn("SuppliersAggregates", pruned.type_map)
+        self.assertNotIn("SuppliersGroupBy", pruned.type_map)
+        self.assertNotIn("aggregates", pruned.type_map["SuppliersConnection"].fields)
+        self.assertEqual(
+            set(pruned.type_map["SuppliersOrderBy"].values),
+            {"NATURAL", "ID_ASC", "OWNER_ID_DESC", "SUPPLIERS_COUNT_DESC", "PRIMARY_KEY_ASC"},
+        )
+        # what the guards and the schema check need is still there
+        facts = graphql_validator.SchemaFacts(pruned)
+        self.assertEqual(facts.entities, {"Supplier", "Account", "SupplierServiceConfig"})
+        self.assertIn("Use getSupplierFleetJson.", facts.deprecations["getOldStats"])
+        self.assertIn("serviceConfigs", pruned.type_map["Supplier"].fields)
+
+    def test_the_pruned_introspection_is_cached_on_disk(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "schema.json")
+            with (
+                mock.patch("src.graphql_validator.SCHEMA_CACHE_PATH", path),
+                mock.patch(
+                    "src.graphql_validator.tools_introspection._introspect",
+                    side_effect=lambda _: introspection_from_schema(SCHEMA),
+                ) as introspect,
+            ):
+                first = graphql_validator._introspection()
+                second = graphql_validator._introspection()
+                self.assertEqual(first, second)
+                self.assertEqual(introspect.call_count, 1)
+                # once older than the TTL, the API is introspected again
+                old = time.time() - graphql_validator.SCHEMA_TTL_SECONDS - 1
+                os.utime(path, (old, old))
+                graphql_validator._introspection()
+                self.assertEqual(introspect.call_count, 2)
 
     def test_schema_is_introspected_once_per_ttl(self):
         for _ in range(3):

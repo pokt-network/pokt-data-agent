@@ -1,17 +1,24 @@
 """GraphQL query validation."""
 
+import hashlib
+import json
 import logging
+import os
+import re
 import threading
 import time
-from typing import Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from graphql import (
+    BREAK,
     DocumentNode,
+    EnumValueNode,
     FieldNode,
     FragmentDefinitionNode,
     FragmentSpreadNode,
     GraphQLError,
     GraphQLInputObjectType,
+    GraphQLObjectType,
     GraphQLSchema,
     InlineFragmentNode,
     IntValueNode,
@@ -19,14 +26,22 @@ from graphql import (
     ObjectValueNode,
     OperationDefinitionNode,
     SelectionSetNode,
+    TypeInfo,
+    TypeInfoVisitor,
     ValueNode,
     VariableNode,
+    Visitor,
     build_client_schema,
     get_introspection_query,
+    get_named_type,
+    is_input_object_type,
+    is_interface_type,
+    is_object_type,
     parse,
     print_ast,
     specified_rules,
     validate,
+    visit,
 )
 from graphql.validation import NoDeprecatedCustomRule
 
@@ -112,11 +127,21 @@ HIDDEN_FIELDS = {
     "eventSupplierSlasheds": 'getActorLifecycleJson with kind: "supplier" and events: ["slash"]; totals in '
     "getSupplierPenaltiesJson",
     "getSupplierStatsByDomains": 'getSupplierFleetList with domains, stakeStatuses: ["Staked"] and bySupplier: false',
+    "relayByBlockAndServices": "getServiceUsageJson",
+    "relays": "nothing: the table is empty",
 }
 EVENT_PREFIXES = ("event", "msg")
 EVENT_HINT = "the event and message tables are hidden: use the function that answers the question (introspect Query)"
 # Sums and groupings over a list, which the API no longer serves, and where to find them instead.
 AGGREGATE_FIELDS = ("aggregates", "groupedAggregates")
+RELATION_HINT = (
+    "select its id column and query that entity as its own root field filtered by that id, in the same query or the "
+    'next one (e.g. balances(filter: {accountId: {equalTo: "pokt1..."}}, first: 10))'
+)
+FILTER_HINT = (
+    "Use the operators, on the entity's own columns only; relations are not served, so query the other entity on "
+    "its own and filter by its id column (supplierId, applicationId, blockId)."
+)
 AGGREGATE_HINT = (
     "use totalCount for a count, a function that sums the rows (getSupplierFleetList, getApplicationFleetList, "
     "getServiceSummaryList, getBlockStatsJson, getMorseClaimSummaryList or the settlement catalog ...Json), or the "
@@ -179,6 +204,13 @@ FILTER_OPERATORS = frozenset(
     }
 )
 FILTER_LOGIC = ("and", "or", "not")
+# orderBy values that sort by a related row (ACCOUNT_BY_OWNER_ID__ID_ASC) or by a sum over related rows
+# (EVENT_CLAIM_SETTLEDS_SUM_CLAIMED_AMOUNT_DESC): the fallback before the live schema loads. It misses the counts
+# (SERVICE_CONFIGS_COUNT_DESC), which read like a column such as SUPPLIERS_COUNT_ASC; the schema-typed walk does not.
+RELATION_ORDER = re.compile(
+    r"__|_(SUM|DISTINCT_COUNT|MIN|MAX|AVERAGE|STDDEV_SAMPLE|STDDEV_POPULATION|VARIANCE_SAMPLE|VARIANCE_POPULATION)_"
+)
+ORDER_HINT = "sums and counts over a relation are not served. Order by one of the list's own columns (e.g. ID_ASC)."
 # The fields of a list (connection) that hold its rows; any other field with a selection set below a row is a relation
 # to another entity.
 CONNECTION_FIELDS = ("nodes", "edges", "pageInfo", "totalCount")
@@ -220,9 +252,10 @@ def _child_fields(
     return fields
 
 
-def _relation_filter(value: ValueNode, operators: FrozenSet[str]) -> Optional[str]:
+def _relation_filter(value: ValueNode, operators: Optional[FrozenSet[str]]) -> Optional[str]:
     """Why a filter value filters through a relation (or holds a misspelled operator, which reads the same, or a
-    variable, whose keys cannot be checked), else None."""
+    variable, whose keys cannot be checked), else None. With operators None only the variables are checked: the
+    schema-typed walk checks the rest."""
     if isinstance(value, VariableNode):
         return f'"${value.name.value}" is a variable, whose keys cannot be checked: write the filter inline'
     if isinstance(value, ListValueNode):
@@ -235,12 +268,14 @@ def _relation_filter(value: ValueNode, operators: FrozenSet[str]) -> Optional[st
             error = _relation_filter(entry.value, operators)
             if error:
                 return error
-        elif key.endswith("Exist"):
-            return f'"{key}" tests a relation'
         elif isinstance(entry.value, VariableNode):
             return (
                 f'"{key}" holds the variable "${entry.value.name.value}", whose keys cannot be checked: write it inline'
             )
+        elif operators is None:
+            continue
+        elif key.endswith("Exist"):
+            return f'"{key}" tests a relation'
         elif isinstance(entry.value, ObjectValueNode):
             inner = next((f.name.value for f in entry.value.fields if f.name.value not in operators), None)
             if inner:
@@ -306,23 +341,24 @@ def _check_field(
         return f'"{name}" is leaving the API: ' + (
             f"use {HIDDEN_FIELDS[name]}." if name in HIDDEN_FIELDS else f"{EVENT_HINT}."
         )
-    operators = facts.operators if facts else FILTER_OPERATORS
+    # With the live schema loaded, relations and relation filters are found by type (_closed_schema_errors); these
+    # name patterns are the fallback before it loads.
+    operators = None if facts else FILTER_OPERATORS
     for arg in field.arguments:
         error = _relation_filter(arg.value, operators) if arg.name.value == "filter" else None
         if error:
-            return (
-                f'the filter of "{name}" is refused: {error}. Use the operators, on the entity\'s own columns only; '
-                "relations are not served, so query the other entity on its own and filter by its id column "
-                "(supplierId, applicationId, blockId)."
+            return f'the filter of "{name}" is refused: {error}. {FILTER_HINT}'
+        values = arg.value.values if isinstance(arg.value, ListValueNode) else [arg.value]
+        if arg.name.value == "orderBy" and not facts:
+            order = next(
+                (v.value for v in values if isinstance(v, EnumValueNode) and RELATION_ORDER.search(v.value)), None
             )
+            if order:
+                return f'"{name}" orders by {order}, which is not one of its own columns: {ORDER_HINT}'
     if field.selection_set is None:
         return None
-    if level == "row":
-        return (
-            f'"{name}" is a relation to another entity, which is not served: select its id column (e.g. {name}Id) '
-            "and query that entity as its own root field filtered by that id, in the same query or the next one "
-            '(e.g. balances(filter: {accountId: {equalTo: "pokt1..."}}, first: 10)).'
-        )
+    if level == "row" and not facts:
+        return f'"{name}" is a relation to another entity, which is not served: {RELATION_HINT}.'
 
     children = _child_fields(field.selection_set, fragments, path)
     if any(child.name.value in ("nodes", "edges") for child, _ in children):
@@ -379,7 +415,87 @@ def check_query_guards(document: DocumentNode) -> Optional[str]:
     except RecursionError:
         # A chain of about a thousand fragments, each spreading the next, is deeper than Python's recursion limit.
         raise GraphQLError("Query too deeply nested to check.") from None
-    return None
+    error = _closed_schema_errors(document, facts) if facts else None
+    return f"Query refused: {error}" if error else None
+
+
+def _constant_case(name: str) -> str:
+    """A field name as PostGraphile spells it in an orderBy value: stakeStatus -> STAKE_STATUS."""
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name).upper()
+
+
+def _column_order_values(columns: List[str]) -> Set[str]:
+    """The orderBy values of a list that sort by its own columns."""
+    values = {"NATURAL", "PRIMARY_KEY_ASC", "PRIMARY_KEY_DESC"}
+    for column in columns:
+        values |= {f"{_constant_case(column)}_ASC", f"{_constant_case(column)}_DESC"}
+    return values
+
+
+class _ClosedSchemaVisitor(Visitor):
+    """Walks a query with the live schema's types and stops at the first thing the closed schema does not serve: a
+    field of an entity whose type is an object (a relation), a filter field whose type is another entity's filter or a
+    to-many filter (or tests that a related row exists), and an orderBy value that is not a column of the list's own
+    entity (a sum or count over a relation)."""
+
+    def __init__(self, type_info: TypeInfo, facts: "SchemaFacts"):
+        super().__init__()
+        self.type_info, self.facts = type_info, facts
+        self.fields: List[str] = []
+        self.error: Optional[str] = None
+
+    def enter_field(self, node, *_):
+        parent, field = self.type_info.get_parent_type(), self.type_info.get_field_def()
+        self.fields.append(node.name.value)
+        if parent is not None and parent.name in self.facts.entities and field is not None:
+            target = get_named_type(field.type)
+            if is_object_type(target) or is_interface_type(target):
+                self.error = (
+                    f'"{node.name.value}" is a relation to another entity, which is not served: {RELATION_HINT}.'
+                )
+                return BREAK
+        return None
+
+    def leave_field(self, *_):
+        self.fields.pop()
+
+    def enter_object_field(self, node, *_):
+        parent = get_named_type(self.type_info.get_parent_input_type())
+        key = node.name.value
+        if parent is None or parent.name not in self.facts.entity_filters or key in FILTER_LOGIC:
+            return None
+        target = get_named_type(self.type_info.get_input_type())
+        exists = key.endswith("Exist") and key[: -len("Exist")] in parent.fields
+        if exists or (target is not None and target.name in self.facts.relation_filters):
+            name = self.fields[-1] if self.fields else "the query"
+            self.error = f'the filter of "{name}" is refused: "{key}" filters through a relation. {FILTER_HINT}'
+            return BREAK
+        return None
+
+    def enter_argument(self, node, *_):
+        if node.name.value != "orderBy":
+            return None
+        field = self.type_info.get_field_def()
+        entity = self.facts.list_entity(field.type) if field is not None else None
+        if entity is None:
+            return None
+        values = node.value.values if isinstance(node.value, ListValueNode) else [node.value]
+        allowed = self.facts.order_values[entity]
+        for value in values:
+            if isinstance(value, EnumValueNode) and value.value not in allowed:
+                self.error = (
+                    f'"{self.fields[-1] if self.fields else entity}" orders by {value.value}, which is not one of '
+                    f"its own columns ({entity}): {ORDER_HINT}"
+                )
+                return BREAK
+        return None
+
+
+def _closed_schema_errors(document: DocumentNode, facts: "SchemaFacts") -> Optional[str]:
+    type_info = TypeInfo(facts.schema)
+    visitor = _ClosedSchemaVisitor(type_info, facts)
+    visit(document, TypeInfoVisitor(type_info, visitor))
+    return visitor.error
 
 
 # The live schema, built from one introspection of the API (tools_introspection's client) and rebuilt once it is older
@@ -392,10 +508,32 @@ SCHEMA_RETRY_SECONDS = 60
 
 
 class SchemaFacts:
-    """The live schema, the operators of its filter types on a column, and the deprecation reasons of its root fields."""
+    """The live schema, the operators of its filter types on a column, the deprecation reasons of its root fields, and
+    what the schema-typed walk needs: its entities (the types with a node id), their filter types and the filter types
+    of their relations, and the orderBy values of each entity's own columns."""
 
     def __init__(self, schema: GraphQLSchema):
         self.schema = schema
+        node = schema.type_map.get("Node")
+        self.entities = frozenset(
+            type_.name
+            for type_ in schema.type_map.values()
+            if isinstance(type_, GraphQLObjectType) and node in type_.interfaces and type_ is not schema.query_type
+        )
+        self.entity_filters = frozenset(f"{name}Filter" for name in self.entities)
+        self.relation_filters = self.entity_filters | frozenset(
+            name for name, type_ in schema.type_map.items() if is_input_object_type(type_) and "ToMany" in name
+        )
+        self.order_values = {
+            name: _column_order_values(
+                [
+                    field_name
+                    for field_name, field in schema.type_map[name].fields.items()
+                    if not (is_object_type(get_named_type(field.type)) or is_interface_type(get_named_type(field.type)))
+                ]
+            )
+            for name in self.entities
+        }
         self.operators = (
             frozenset(
                 name
@@ -415,6 +553,130 @@ class SchemaFacts:
             if field.deprecation_reason
         }
 
+    def list_entity(self, type_) -> Optional[str]:
+        """The entity whose rows a list (connection) type holds, or None for any other type."""
+        named = get_named_type(type_)
+        nodes = named.fields.get("nodes") if is_object_type(named) else None
+        entity = get_named_type(nodes.type) if nodes is not None else None
+        return entity.name if entity is not None and entity.name in self.entities else None
+
+
+# The types of what the closed schema drops wholesale and the guards refuse by name (aggregates, group-bys, the
+# many-to-many connections), and the orderBy values over relations: about two thirds of the introspection. They are
+# pruned before the schema is built, with every field that refers to them, so that they cost no memory; a query that
+# uses them is refused by the guards first, or else by the schema check as unknown.
+PRUNED_TYPES = re.compile(r"Aggregate|GroupBy|Having|ManyToMany")
+
+
+def _named(type_ref: Dict[str, Any]) -> str:
+    while type_ref.get("ofType"):
+        type_ref = type_ref["ofType"]
+    return type_ref["name"]
+
+
+def prune_introspection(data: Dict[str, Any]) -> Dict[str, Any]:
+    """The introspection result without PRUNED_TYPES, the fields and arguments that refer to them, the orderBy values
+    that are not a column of the list's own entity, and the types nothing refers to any more."""
+    schema = data["__schema"]
+    types = {t["name"]: t for t in schema["types"]}
+    removed = {name for name in types if PRUNED_TYPES.search(name)}
+    changed = True
+    while changed:
+        changed = False
+        for name, type_ in types.items():
+            if name in removed:
+                continue
+            for key in ("fields", "inputFields"):
+                entries = type_.get(key)
+                if not entries:
+                    continue
+                kept = []
+                for entry in entries:
+                    if _named(entry["type"]) in removed:
+                        continue
+                    args = entry.get("args") or []
+                    if any(_named(a["type"]) in removed and a["type"]["kind"] == "NON_NULL" for a in args):
+                        continue
+                    if args:
+                        entry["args"] = [a for a in args if _named(a["type"]) not in removed]
+                    kept.append(entry)
+                if len(kept) != len(entries):
+                    type_[key] = kept
+                    changed = True
+                    if not kept:
+                        removed.add(name)
+    # orderBy values: keep the list's own columns, found through each connection field's nodes type
+    for type_ in types.values():
+        for field in type_.get("fields") or []:
+            order = next((a for a in field.get("args") or [] if a["name"] == "orderBy"), None)
+            nodes = next(
+                (f for f in types.get(_named(field["type"]), {}).get("fields") or [] if f["name"] == "nodes"), None
+            )
+            if order is None or nodes is None:
+                continue
+            entity = types.get(_named(nodes["type"]))
+            columns = [
+                f["name"]
+                for f in entity.get("fields") or []
+                if types[_named(f["type"])]["kind"] not in ("OBJECT", "INTERFACE")
+            ]
+            allowed = _column_order_values(columns)
+            enum = types[_named(order["type"])]
+            enum["enumValues"] = [v for v in enum["enumValues"] if v["name"] in allowed]
+    # keep what the root types and the directives still reach
+    reached: Set[str] = set()
+    pending = [schema[k]["name"] for k in ("queryType", "mutationType", "subscriptionType") if schema.get(k)]
+    pending += [_named(a["type"]) for d in schema.get("directives") or [] for a in d.get("args") or []]
+    while pending:
+        name = pending.pop()
+        if name in reached or name not in types or name in removed:
+            continue
+        reached.add(name)
+        type_ = types[name]
+        for entry in (type_.get("fields") or []) + (type_.get("inputFields") or []):
+            pending.append(_named(entry["type"]))
+            pending += [_named(a["type"]) for a in entry.get("args") or []]
+        pending += [i["name"] for i in type_.get("interfaces") or []]
+        pending += [p["name"] for p in type_.get("possibleTypes") or []]
+    for type_ in types.values():
+        if type_.get("possibleTypes"):
+            type_["possibleTypes"] = [p for p in type_["possibleTypes"] if p["name"] in reached]
+    schema["types"] = [
+        t for name, t in types.items() if name in reached or name.startswith("__") or t["kind"] == "SCALAR"
+    ]
+    return data
+
+
+# The pruned introspection is kept on disk for the TTL, so that every process of a deployment (and a restart) builds
+# the schema without introspecting the API again. POCKET_NETWORK_SCHEMA_CACHE names the file; a failed read or write
+# only means one more introspection.
+SCHEMA_CACHE_PATH = os.getenv("POCKET_NETWORK_SCHEMA_CACHE") or os.path.join(
+    os.path.expanduser("~"),
+    ".cache",
+    "pokt-data-agent",
+    f"schema-{hashlib.sha256(str(tools_introspection._ENDPOINT).encode()).hexdigest()[:12]}.json",
+)
+
+
+def _introspection() -> Dict[str, Any]:
+    """The pruned introspection: from the disk cache while it is younger than the TTL, else from the API."""
+    try:
+        if time.time() - os.path.getmtime(SCHEMA_CACHE_PATH) < SCHEMA_TTL_SECONDS:
+            with open(SCHEMA_CACHE_PATH) as cached:
+                return json.load(cached)
+    except (OSError, ValueError):
+        pass
+    data = prune_introspection(tools_introspection._introspect(get_introspection_query(descriptions=False)))
+    try:
+        os.makedirs(os.path.dirname(SCHEMA_CACHE_PATH), exist_ok=True)
+        partial = f"{SCHEMA_CACHE_PATH}.{os.getpid()}.tmp"
+        with open(partial, "w") as cache:
+            json.dump(data, cache)
+        os.replace(partial, SCHEMA_CACHE_PATH)
+    except OSError as e:
+        logger.warning("Could not cache the GraphQL schema on disk: %s", e)
+    return data
+
 
 _live: Optional[SchemaFacts] = None
 _next_refresh_at = 0.0
@@ -423,7 +685,7 @@ _refresh_lock = threading.Lock()
 
 
 def _fetch_schema() -> GraphQLSchema:
-    return build_client_schema(tools_introspection._introspect(get_introspection_query(descriptions=False)))
+    return build_client_schema(_introspection())
 
 
 def refresh_schema() -> None:
