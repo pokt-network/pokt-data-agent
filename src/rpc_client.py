@@ -343,7 +343,7 @@ RPC_METHODS = {
             "Each entry includes service_id, block_height (when last updated), "
             "num_relays_ema (exponential moving average of relays per session), "
             "and target_hash. Higher num_relays_ema means higher throughput. "
-            "This is the live counterpart to the GraphQL eventRelayMiningDifficultyUpdateds."
+            "This is the live counterpart to the GraphQL getRelayMiningDifficultyJson (the history of the updates)."
         ),
         method_data={
             "http_method": "GET",

@@ -12,6 +12,10 @@ class TestRegistry(unittest.TestCase):
                 with self.subTest(agent=agent.name, method=method):
                     self.assertIn(method, GRAPHQL_REGISTRY)
 
+    def test_every_registered_method_is_used_by_an_agent(self):
+        used = {method for agent in ALL_SUBAGENTS for method in agent.graphql_methods}
+        self.assertFalse(set(GRAPHQL_REGISTRY) - used)
+
     def test_no_raw_payout_table_is_recommended(self):
         self.assertFalse([name for name in GRAPHQL_REGISTRY if name.startswith(RAW_FIELD_PREFIXES)])
 
@@ -35,9 +39,10 @@ class TestRegistry(unittest.TestCase):
                 "getSupplyFlowsJson",
                 "getValidatorRewardsJson",
                 "getDelegatorIncomeJson",
+                "getClaimsJson",
             )
         ]
-        self.assertEqual(len(settlement), 14)
+        self.assertEqual(len(settlement), 15)
         for name in settlement:
             with self.subTest(method=name):
                 self.assertEqual(GRAPHQL_REGISTRY[name].fields_notes.get("coverage"), COVERAGE_NOTE)

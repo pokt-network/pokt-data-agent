@@ -116,7 +116,7 @@ return type (one level deep).  Use this to understand how to call a field
 and what data you can request back.
 
 Args:
-    field_name: Name of the top-level query field, e.g. "eventClaimSettleds"
+    field_name: Name of the top-level query field, e.g. "suppliers"
 """
 GET_FIELD_SCHEMA_NAME = "data_get_field_schema"
 
