@@ -192,7 +192,7 @@ class TestQueryGuards(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(
                     guard(f"{{ {name}(first: 5) {{ nodes {{ id }} }} }}"),
-                    f'Query refused: "{name}" is no longer served: use {target}.',
+                    f'Query refused: "{name}" is leaving the API: use {target}.',
                 )
         self.assertIn("event and message tables are hidden", guard("{ msgUnstakeSuppliers(first: 5) { totalCount } }"))
         # an entity's own column of the same shape is not a hidden table

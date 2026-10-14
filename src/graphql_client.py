@@ -376,7 +376,7 @@ GRAPHQL_REGISTRY = {
             'query { balances(first: 20, orderBy: AMOUNT_DESC, filter: {denom: {equalTo: "upokt"}}) '
             "{ totalCount nodes { accountId amount denom lastUpdatedBlockId } } }",
             "# Count accounts active (balance updated) since a block height (a date's first height: blocks with a timestamp filter, orderBy ID_ASC, first 1)\n"
-            'query { balances(filter: {lastUpdatedBlockId: {greaterThanOrEqualTo: "1000000"}, '
+            'query { balances(filter: {lastUpdatedBlockId: {greaterThanOrEqualTo: "950000"}, '
             'denom: {equalTo: "upokt"}}) { totalCount } }',
         ],
     ),

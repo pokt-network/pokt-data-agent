@@ -271,9 +271,9 @@ def _check_field(
     if name == "nodeId" or (level == "root" and (name == "node" or name.endswith("ByNodeId"))):
         return f'"{name}" is not served: look an entity up by its key, e.g. supplier(id: "pokt1...") or block(id: "1").'
     if level == "root" and name in HIDDEN_FIELDS:
-        return f'"{name}" is no longer served: use {HIDDEN_FIELDS[name]}.'
+        return f'"{name}" is leaving the API: use {HIDDEN_FIELDS[name]}.'
     if level == "root" and name.startswith(EVENT_PREFIXES):
-        return f'"{name}" is no longer served: {EVENT_HINT}.'
+        return f'"{name}" is leaving the API: {EVENT_HINT}.'
     for arg in field.arguments:
         error = _relation_filter(arg.value) if arg.name.value == "filter" else None
         if error:
