@@ -228,7 +228,7 @@ def _relation_filter(value: ValueNode) -> Optional[str]:
             if inner:
                 return (
                     f'"{key}" holds "{inner}", which is not an operator (equalTo, in, greaterThanOrEqualTo, '
-                    "includes, isNull, ...), so it filters through a relation"
+                    "includes, isNull, ...): a misspelled operator, or a filter through a relation"
                 )
     return None
 
@@ -278,8 +278,9 @@ def _check_field(
         error = _relation_filter(arg.value) if arg.name.value == "filter" else None
         if error:
             return (
-                f'the filter of "{name}" is not served: {error}. Filter on the entity\'s own columns, such as its id '
-                "columns (supplierId, applicationId, blockId), after querying the other entity on its own."
+                f'the filter of "{name}" is refused: {error}. Use the operators, on the entity\'s own columns only; '
+                "relations are not served, so query the other entity on its own and filter by its id column "
+                "(supplierId, applicationId, blockId)."
             )
     if field.selection_set is None:
         return None

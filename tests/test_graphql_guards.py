@@ -175,7 +175,7 @@ class TestQueryGuards(unittest.TestCase):
         ):
             with self.subTest(query=query):
                 error = guard(query)
-                self.assertIn("is not served", error)
+                self.assertIn("is refused", error)
                 self.assertIn(message, error)
 
     def test_node_lookups_are_refused(self):
