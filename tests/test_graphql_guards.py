@@ -1,3 +1,4 @@
+import threading
 import time
 import unittest
 from unittest import mock
@@ -12,6 +13,7 @@ from src.graphql_validator import (
     LIVE_REWARD_FIELDS,
     MAX_FIRST,
     MAX_VISITED_FIELDS,
+    ROW_FUNCTIONS,
     check_query_guards,
     validate_graphql_query,
 )
@@ -77,7 +79,15 @@ class TestQueryGuards(unittest.TestCase):
 
     def test_catalog_functions_mirror_pocketdex(self):
         camel = {n.split("_")[0] + "".join(w.title() for w in n.split("_")[1:]) for n in POCKETDEX_CATALOG_FUNCTIONS}
-        self.assertEqual(CATALOG_FUNCTIONS, camel)
+        self.assertEqual(CATALOG_FUNCTIONS | ROW_FUNCTIONS, camel)
+        self.assertFalse(CATALOG_FUNCTIONS & ROW_FUNCTIONS)
+
+    def test_row_function_list_variants_are_refused(self):
+        for name in sorted(ROW_FUNCTIONS):
+            with self.subTest(name=name):
+                error = guard(f"{{ {name}List(rowLimit: 10) {{ height }} }}")
+                self.assertIn("no rows cannot say whether the range is not covered", error)
+                self.assertIn(f"Use {name}Json: the same rows", error)
 
     def test_catalog_row_variants_are_refused(self):
         for query in (
@@ -126,6 +136,8 @@ class TestQueryGuards(unittest.TestCase):
             '{ transactions(first: 5, filter: {or: [{code: {equalTo: 0}}, {signerAddress: {in: ["pokt1x"]}}], '
             'amountOfMessages: {contains: [{type: "/cosmos.bank.v1beta1.MsgSend"}]}}) { nodes { id } } }',
             '{ getSupplierFleetList(stakeStatuses: ["Staked"], bySupplier: false) { stakeUpokt supplierCount } }',
+            # a variable as an operator's value is a plain value
+            "query ($a: String) { balances(first: 5, filter: {accountId: {equalTo: $a}}) { nodes { id } } }",
             "{ _metadata { lastProcessedHeight indexerHealthy } }",
             '{ __type(name: "Supplier") { fields { name type { name ofType { name } } } } }',
         ):
@@ -189,6 +201,10 @@ class TestQueryGuards(unittest.TestCase):
             ),
             # a misspelled operator reads the same, and the message says which operators exist
             ('{ blocks(filter: {id: {gte: "1"}}) { totalCount } }', '"id" holds "gte", which is not an operator'),
+            # a variable could hold any of the above
+            ("query ($f: BalanceFilter) { balances(filter: $f) { totalCount } }", '"$f" is a variable'),
+            ("query ($b: BlockFilter) { balances(filter: {lastUpdatedBlock: $b}) { totalCount } }", '"$b"'),
+            ("query ($f: BalanceFilter) { balances(filter: {or: [$f]}) { totalCount } }", '"$f" is a variable'),
         ):
             with self.subTest(query=query):
                 error = guard(query)
@@ -327,23 +343,43 @@ SCHEMA = build_schema(
       suppliers(first: Int, filter: SupplierFilter): SuppliersConnection
       getSupplierFleetJson(owners: [String]): JSON
       getOldStats(owners: [String]): JSON @deprecated(reason: "Use getSupplierFleetJson.")
+      eventClaimSettleds(first: Int): SuppliersConnection @deprecated(reason: "Use getClaimsList, live reason.")
     }
-    input SupplierFilter { id: StringFilter }
-    input StringFilter { equalTo: String }
+    input SupplierFilter { id: StringFilter and: [SupplierFilter] }
+    input StringFilter { equalTo: String newOperator: String }
     type SuppliersConnection { totalCount: Int nodes: [Supplier] }
     type Supplier { id: String ownerId: String }
     """
 )
 
 
+REAL_THREAD = threading.Thread
+
+
+class SyncThread:
+    """A thread that runs its target on start(), so that a test sees the refresh it starts."""
+
+    def __init__(self, target, **_):
+        self.target = target
+
+    def start(self):
+        self.target()
+
+
 class TestSchemaCheck(unittest.TestCase):
     def setUp(self):
-        graphql_validator._schema, graphql_validator._schema_fetched_at = None, None
-        self.addCleanup(setattr, graphql_validator, "_schema", None)
-        self.addCleanup(setattr, graphql_validator, "_schema_fetched_at", None)
+        self.reset()
+        self.addCleanup(self.reset)
         patcher = mock.patch("src.graphql_validator._fetch_schema", return_value=SCHEMA)
         self.fetch = patcher.start()
         self.addCleanup(patcher.stop)
+        thread = mock.patch("src.graphql_validator.threading.Thread", SyncThread)
+        thread.start()
+        self.addCleanup(thread.stop)
+
+    @staticmethod
+    def reset():
+        graphql_validator._live, graphql_validator._next_refresh_at, graphql_validator._refreshing = None, 0.0, False
 
     def test_deprecated_and_unknown_fields_are_refused(self):
         for query, message in (
@@ -375,6 +411,20 @@ class TestSchemaCheck(unittest.TestCase):
         self.assertIn("Use getSupplierFleetJson.", error)
         client.return_value.execute_query.assert_not_called()
 
+    def test_the_guards_use_the_live_schema(self):
+        graphql_validator.refresh_schema()
+        # the hidden list's replacement as the live deprecation reason says it
+        self.assertEqual(
+            guard("{ eventClaimSettleds(first: 5) { nodes { id } } }"),
+            'Query refused: "eventClaimSettleds" is leaving the API: Use getClaimsList, live reason. '
+            "Use getClaimsJson, not getClaimsList.",
+        )
+        # an operator the live schema has and the fallback list does not
+        query = '{ suppliers(first: 5, filter: {id: {newOperator: "a"}}) { nodes { id } } }'
+        self.assertIsNone(guard(query))
+        self.reset()
+        self.assertIn('"id" holds "newOperator", which is not an operator', guard(query))
+
     def test_schema_is_introspected_once_per_ttl(self):
         for _ in range(3):
             validate_graphql_query("{ suppliers(first: 5) { totalCount } }", "suppliers")
@@ -400,6 +450,34 @@ class TestSchemaCheck(unittest.TestCase):
         self.fetch.side_effect = OSError("introspection is off")
         with mock.patch("src.graphql_validator.time.monotonic", return_value=time.monotonic() + 3601):
             ok, _, error = validate_graphql_query('{ getOldStats(owners: ["pokt1x"]) }', "suppliers")
+        self.assertFalse(ok)
+        self.assertIn("deprecated", error)
+
+    def test_a_slow_introspection_never_keeps_a_query_waiting(self):
+        release, threads = threading.Event(), []
+
+        def slow_fetch():
+            release.wait(5)
+            return SCHEMA
+
+        def real_thread(**kwargs):
+            threads.append(REAL_THREAD(**kwargs))
+            return threads[-1]
+
+        self.fetch.side_effect = slow_fetch
+        query = '{ getOldStats(owners: ["pokt1x"]) }'
+        with mock.patch("src.graphql_validator.threading.Thread", real_thread):
+            start = time.monotonic()
+            first = validate_graphql_query(query, "suppliers")
+            second = validate_graphql_query(query, "suppliers")
+            elapsed = time.monotonic() - start
+            # one introspection at a time, and both queries answered by the guards meanwhile
+            self.assertEqual(len(threads), 1)
+            self.assertLess(elapsed, 1)
+            self.assertEqual((first[0], second[0]), (True, True))
+            release.set()
+            threads[0].join(5)
+        ok, _, error = validate_graphql_query(query, "suppliers")
         self.assertFalse(ok)
         self.assertIn("deprecated", error)
 

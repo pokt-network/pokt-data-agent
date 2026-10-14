@@ -186,7 +186,9 @@ Guards, checked before the query is sent:
   and after: <endCursor>. To walk a whole list, read _metadata lastProcessedHeight once (data_get_indexer_status) and
   pass it as blockHeight to every page, so the pages are one consistent read; stop when hasNextPage is false, and check
   the rows add up to totalCount. Row functions (getClaimsJson, getActorLifecycleJson, ...) page with their before...
-  arguments. A full page may not be the last one: never report it as the whole list.
+  arguments; the ...List functions without them (getSupplierFleetList, getApplicationFleetList, getServiceSummaryList)
+  with first and offset in their own order, until a call returns fewer rows than first. A full page may not be the last
+  one: never report it as the whole list.
 - What the API no longer serves is refused, with what to use instead: the event and message tables
   (eventClaimSettleds, msgStake..., ...), relations from one entity to another (select the id column, e.g. blockId,
   and query the other entity on its own), filters through a relation, aggregates and groupedAggregates (use totalCount

@@ -1,16 +1,17 @@
 """GraphQL query validation."""
 
 import logging
+import threading
 import time
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
-import requests
 from graphql import (
     DocumentNode,
     FieldNode,
     FragmentDefinitionNode,
     FragmentSpreadNode,
     GraphQLError,
+    GraphQLInputObjectType,
     GraphQLSchema,
     InlineFragmentNode,
     IntValueNode,
@@ -19,6 +20,7 @@ from graphql import (
     OperationDefinitionNode,
     SelectionSetNode,
     ValueNode,
+    VariableNode,
     build_client_schema,
     get_introspection_query,
     parse,
@@ -28,7 +30,8 @@ from graphql import (
 )
 from graphql.validation import NoDeprecatedCustomRule
 
-from src.graphql_client import GRAPHQL_REGISTRY, POCKET_NETWORK_DATA_ENDPOINT
+from src import tools_introspection
+from src.graphql_client import GRAPHQL_REGISTRY
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +59,8 @@ LIVE_REWARD_FIELDS = (
     "getBurnBreakdownBetweenDates",
 )
 # The settlement catalog functions, as GraphQL names: pocketdex CATALOG_FUNCTIONS
-# (src/mappings/dbFunctions/settlement/functions.ts). Each has a ...List row variant and a ...Json twin.
+# (src/mappings/dbFunctions/settlement/functions.ts) without ROW_FUNCTIONS. Each has a ...List row variant, paged at
+# 1000 rows, and a ...Json twin with every row in one call and the range it covers.
 CATALOG_FUNCTIONS = frozenset(
     {
         "moneyCoverage",
@@ -73,16 +77,23 @@ CATALOG_FUNCTIONS = frozenset(
         "getAppAutoUnstakes",
         "getSupplierProofs",
         "getParamHistory",
+        "getBlockStats",
+    }
+)
+# The rest of pocketdex CATALOG_FUNCTIONS: functions that list rows one by one, newest first, at most rowLimit a call
+# and paged with before...; the ...List variant and the ...Json twin return the same rows, the twin with the range.
+ROW_FUNCTIONS = frozenset(
+    {
         "getClaims",
         "getActorLifecycle",
-        "getBlockStats",
         "getRelayMiningDifficulty",
         "getCreatedClaims",
         "getMorseClaims",
     }
 )
 # The lists and functions the closed pocketdex schema drops (docs/graphql-migration.md), with what replaces them. The
-# event and message tables not named here are hidden too (EVENT_PREFIXES).
+# event and message tables not named here are hidden too (EVENT_PREFIXES). The live schema's deprecation reason, when
+# there is one, is said instead: these are the fallback while the API cannot be introspected.
 HIDDEN_FIELDS = {
     "eventClaimSettleds": "getClaimsJson (one row per claim); sums in getSupplierEarningsJson, getApplicationSpendJson, "
     "getServiceUsageJson",
@@ -112,7 +123,8 @@ AGGREGATE_HINT = (
     "newest blocks row's staked* and unstaking* columns"
 )
 # The operators of the filter types on a column (pocketdex schema, 2026-10-14). A filter key whose value holds anything
-# else is a filter through a relation, which the API no longer serves.
+# else is a filter through a relation, which the API no longer serves. The live schema's operators are used instead
+# when it has been introspected: this list is the fallback.
 FILTER_OPERATORS = frozenset(
     {
         "anyEqualTo",
@@ -208,23 +220,29 @@ def _child_fields(
     return fields
 
 
-def _relation_filter(value: ValueNode) -> Optional[str]:
-    """Why a filter value filters through a relation (or holds a misspelled operator, which reads the same), else
-    None."""
+def _relation_filter(value: ValueNode, operators: FrozenSet[str]) -> Optional[str]:
+    """Why a filter value filters through a relation (or holds a misspelled operator, which reads the same, or a
+    variable, whose keys cannot be checked), else None."""
+    if isinstance(value, VariableNode):
+        return f'"${value.name.value}" is a variable, whose keys cannot be checked: write the filter inline'
     if isinstance(value, ListValueNode):
-        return next((error for error in map(_relation_filter, value.values) if error), None)
+        return next((error for error in (_relation_filter(v, operators) for v in value.values) if error), None)
     if not isinstance(value, ObjectValueNode):
         return None
     for entry in value.fields:
         key = entry.name.value
         if key in FILTER_LOGIC:
-            error = _relation_filter(entry.value)
+            error = _relation_filter(entry.value, operators)
             if error:
                 return error
         elif key.endswith("Exist"):
             return f'"{key}" tests a relation'
+        elif isinstance(entry.value, VariableNode):
+            return (
+                f'"{key}" holds the variable "${entry.value.name.value}", whose keys cannot be checked: write it inline'
+            )
         elif isinstance(entry.value, ObjectValueNode):
-            inner = next((f.name.value for f in entry.value.fields if f.name.value not in FILTER_OPERATORS), None)
+            inner = next((f.name.value for f in entry.value.fields if f.name.value not in operators), None)
             if inner:
                 return (
                     f'"{key}" holds "{inner}", which is not an operator (equalTo, in, greaterThanOrEqualTo, '
@@ -239,12 +257,14 @@ def _check_field(
     path: Tuple[str, ...],
     visited: List[int],
     level: str = "root",
+    facts: Optional["SchemaFacts"] = None,
 ) -> Optional[str]:
     """Why the field must not be sent, or None.
 
     level says where the field sits: root (a field of Query), connection (a field of a list: nodes, edges, totalCount),
     edge (a field of edges), row (a field of one entity: a node, or what a lookup by key returns) or free (below
-    introspection, _metadata or pageInfo, where no relation rule applies).
+    introspection, _metadata or pageInfo, where no relation rule applies). facts holds what the live schema says, if
+    it has been introspected.
     """
     # visited counts the fields checked so far in the query (one shared counter).
     visited[0] += 1
@@ -257,8 +277,15 @@ def _check_field(
         # The row variant of a settlement catalog function: once pocketdex answers a range it does not cover with
         # what it has, no rows cannot tell "not covered" from "nothing happened".
         return (
-            f'"{name}" is not allowed: its rows cannot say that a range is not covered, so no rows would read as 0. '
-            f"Use {name[: -len('List')]}Json, which returns the same rows with the range it covers."
+            f'"{name}" is not allowed: it pages its rows at 1000, and no rows cannot say that a range is not covered, '
+            f"so they would read as 0. Use {name[: -len('List')]}Json, which returns every row in one call with the "
+            "range it covers."
+        )
+    if name.endswith("List") and name[: -len("List")] in ROW_FUNCTIONS:
+        return (
+            f'"{name}" is not allowed: no rows cannot say whether the range is not covered or nothing happened in it. '
+            f"Use {name[: -len('List')]}Json: the same rows (at most rowLimit, paged with before...) with the range "
+            "it covers."
         )
     if name in LIVE_REWARD_FIELDS:
         return (
@@ -270,12 +297,18 @@ def _check_field(
         return f'"{name}" is not served: {AGGREGATE_HINT}.'
     if name == "nodeId" or (level == "root" and (name == "node" or name.endswith("ByNodeId"))):
         return f'"{name}" is not served: look an entity up by its key, e.g. supplier(id: "pokt1...") or block(id: "1").'
-    if level == "root" and name in HIDDEN_FIELDS:
-        return f'"{name}" is leaving the API: use {HIDDEN_FIELDS[name]}.'
-    if level == "root" and name.startswith(EVENT_PREFIXES):
-        return f'"{name}" is leaving the API: {EVENT_HINT}.'
+    if level == "root" and (name in HIDDEN_FIELDS or name.startswith(EVENT_PREFIXES)):
+        reason = facts.deprecations.get(name) if facts else None
+        if reason:
+            # pocketdex names the ...List variants too, which the guards refuse
+            refused = sorted(f for f in CATALOG_FUNCTIONS | ROW_FUNCTIONS if f"{f}List" in reason)
+            return f'"{name}" is leaving the API: {reason}' + "".join(f" Use {f}Json, not {f}List." for f in refused)
+        return f'"{name}" is leaving the API: ' + (
+            f"use {HIDDEN_FIELDS[name]}." if name in HIDDEN_FIELDS else f"{EVENT_HINT}."
+        )
+    operators = facts.operators if facts else FILTER_OPERATORS
     for arg in field.arguments:
-        error = _relation_filter(arg.value) if arg.name.value == "filter" else None
+        error = _relation_filter(arg.value, operators) if arg.name.value == "filter" else None
         if error:
             return (
                 f'the filter of "{name}" is refused: {error}. Use the operators, on the entity\'s own columns only; '
@@ -321,7 +354,7 @@ def _check_field(
     else:
         child_level = "free"
     for child, child_path in children:
-        error = _check_field(child, fragments, child_path, visited, child_level)
+        error = _check_field(child, fragments, child_path, visited, child_level, facts)
         if error:
             return error
     return None
@@ -335,11 +368,12 @@ def check_query_guards(document: DocumentNode) -> Optional[str]:
     """
     fragments = {d.name.value: d for d in document.definitions if isinstance(d, FragmentDefinitionNode)}
     visited = [0]
+    facts = _live
     try:
         for definition in document.definitions:
             if isinstance(definition, OperationDefinitionNode):
                 for field, path in _child_fields(definition.selection_set, fragments):
-                    error = _check_field(field, fragments, path, visited)
+                    error = _check_field(field, fragments, path, visited, "root", facts)
                     if error:
                         return f"Query refused: {error}"
     except RecursionError:
@@ -348,38 +382,76 @@ def check_query_guards(document: DocumentNode) -> Optional[str]:
     return None
 
 
-# The live schema, built from one introspection of the API and rebuilt once it is older than SCHEMA_TTL_SECONDS (the
-# introspection tools' TTL), so that a long-running server follows the fields the API adds, deprecates and removes. A
-# failed introspection keeps the schema it had (none at first) and is tried again after SCHEMA_RETRY_SECONDS.
-SCHEMA_TTL_SECONDS = 3600
+# The live schema, built from one introspection of the API (tools_introspection's client) and rebuilt once it is older
+# than its cache TTL, so that a long-running server follows the fields the API adds, deprecates and removes. The
+# introspection runs in a background thread, one at a time, and a query is never kept waiting for it: until the first
+# one finishes the guards check queries alone, and a refresh serves the schema it had. A failed introspection is tried
+# again after SCHEMA_RETRY_SECONDS.
+SCHEMA_TTL_SECONDS = tools_introspection.CACHE_TTL_SECONDS
 SCHEMA_RETRY_SECONDS = 60
-_schema: Optional[GraphQLSchema] = None
-_schema_fetched_at: Optional[float] = None
+
+
+class SchemaFacts:
+    """The live schema, the operators of its filter types on a column, and the deprecation reasons of its root fields."""
+
+    def __init__(self, schema: GraphQLSchema):
+        self.schema = schema
+        self.operators = (
+            frozenset(
+                name
+                for type_ in schema.type_map.values()
+                if isinstance(type_, GraphQLInputObjectType)
+                and type_.name.endswith("Filter")
+                and "ToMany" not in type_.name
+                and "Aggregate" not in type_.name
+                and not set(FILTER_LOGIC) & set(type_.fields)
+                for name in type_.fields
+            )
+            or FILTER_OPERATORS
+        )
+        self.deprecations = {
+            name: field.deprecation_reason
+            for name, field in schema.query_type.fields.items()
+            if field.deprecation_reason
+        }
+
+
+_live: Optional[SchemaFacts] = None
+_next_refresh_at = 0.0
+_refreshing = False
+_refresh_lock = threading.Lock()
 
 
 def _fetch_schema() -> GraphQLSchema:
-    response = requests.post(
-        POCKET_NETWORK_DATA_ENDPOINT,
-        json={"query": get_introspection_query(descriptions=False)},
-        headers={"Content-Type": "application/json"},
-        timeout=30,
-    )
-    response.raise_for_status()
-    return build_client_schema(response.json()["data"])
+    return build_client_schema(tools_introspection._introspect(get_introspection_query(descriptions=False)))
+
+
+def refresh_schema() -> None:
+    """Introspect the API and replace the live schema; on failure keep the one there is."""
+    global _live, _next_refresh_at, _refreshing
+    try:
+        _live = SchemaFacts(_fetch_schema())
+        _next_refresh_at = time.monotonic() + SCHEMA_TTL_SECONDS
+    except Exception as e:
+        logger.warning("GraphQL schema introspection failed, keeping the schema there was (if any): %s", e)
+        _next_refresh_at = time.monotonic() + SCHEMA_RETRY_SECONDS
+    finally:
+        with _refresh_lock:
+            _refreshing = False
 
 
 def live_schema() -> Optional[GraphQLSchema]:
-    """The API schema, or None while it cannot be introspected (then only the guards check a query)."""
-    global _schema, _schema_fetched_at
-    now = time.monotonic()
-    if _schema_fetched_at is None or now - _schema_fetched_at > SCHEMA_TTL_SECONDS:
-        try:
-            _schema = _fetch_schema()
-            _schema_fetched_at = now
-        except Exception as e:
-            logger.warning("GraphQL schema introspection failed, checking queries with the guards only: %s", e)
-            _schema_fetched_at = now - SCHEMA_TTL_SECONDS + SCHEMA_RETRY_SECONDS
-    return _schema
+    """The last introspected API schema, or None before the first one (then only the guards check a query). Starts a
+    background introspection when the schema is due, unless one is running; never waits for it."""
+    global _refreshing
+    with _refresh_lock:
+        due = not _refreshing and time.monotonic() >= _next_refresh_at
+        if due:
+            _refreshing = True
+    if due:
+        threading.Thread(target=refresh_schema, name="graphql-schema-refresh", daemon=True).start()
+    facts = _live
+    return facts.schema if facts else None
 
 
 def check_against_schema(document: DocumentNode) -> Optional[str]:

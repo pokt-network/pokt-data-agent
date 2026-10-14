@@ -358,9 +358,10 @@ ROW_NOTES = {
     "result": '{"range": {...}, "data": [rows]}: the rows in "data" with snake_case keys, numbers as strings (amounts in upokt), and the part of the range the data covers in "range". No rows, or a missing row, in a part of the range outside covered_from / covered_to or in a gap is not covered yet, never none or 0.',
 }
 # Rules shared by the functions that answer the current state (getSupplierFleetList, getApplicationFleetList,
-# getServiceSummaryList, getMorseClaimSummaryList): their rows are selected like a list's fields.
+# getServiceSummaryList, getMorseClaimSummaryList): their rows are selected like a list's fields, and paged with first /
+# offset in the function's own order (each call computes its answer whole; they have no before... keys).
 NOW_NOTES = {
-    "result": "Rows with camelCase fields to select, e.g. { stakeUpokt supplierCount }; amounts in upokt. At most 1000 rows a call: an answer of 1000 rows may be cut, so narrow the lists or ask for one total (bySupplier / byApplication false) instead of reporting it as complete.",
+    "result": "Rows with camelCase fields to select, e.g. { stakeUpokt supplierCount }; amounts in upokt. At most 1000 rows a call, in the function's own order: for more, call again with first: 1000 and offset: 1000, 2000, ... until a call returns fewer than 1000 rows, and never report a call of 1000 rows as the whole answer. For one total, bySupplier / byApplication false.",
 }
 
 # Registry of available GraphQL query fields with descriptions
@@ -817,7 +818,7 @@ GRAPHQL_REGISTRY = {
         name="getSupplierFleetList",
         description="Suppliers now, one list at a time: the suppliers given, the suppliers of some owners, the suppliers that share revenue with some operators (rev_share addresses), or those with an endpoint on some domains; or every supplier when none is given. Kept to stakeStatuses (Staked, Unstaking, Unstaked) and services when given. bySupplier true (default) = one row per supplier (owner, status, stake, number of services); false = one row for the whole group: supplierCount and the summed stakeUpokt. Use it for counts and total stake of suppliers.",
         fields_notes={
-            "suppliers/owners/operators/domains": "Up to 200 addresses or domains in one of these lists; give at most one.",
+            "suppliers/owners/operators/domains": 'Up to 200 addresses or domains in one of these lists; give at most one. owners = the suppliers they own now; operators = the Staked suppliers whose service configs share revenue with those addresses now; operatorScope: "ever" = every supplier that ever shared revenue with them, in any stake status (narrow it with stakeStatuses).',
             **NOW_NOTES,
         },
         examples=[
@@ -887,7 +888,7 @@ GRAPHQL_REGISTRY = {
         description="Stake history of suppliers, applications or gateways, one row per event, newest first: stake and unstake messages (with the stake), unbonding begin and end (reason, unbonding end height), for suppliers each slash (service, application, session, penalty, stake before and after it, proof validation status), and for applications and gateways delegations to one another. Use it to track if and when an actor was staked, re-staked, unstaked or slashed.",
         fields_notes={
             "kind": "supplier, application or gateway (required).",
-            "addresses/owners/operators": "addresses = those actors (up to 200); for suppliers also owners or operators. Give one list.",
+            "addresses/owners/operators": 'addresses = those actors (up to 200); for suppliers also owners (the suppliers they own now) or operators = the Staked suppliers whose service configs share revenue with those addresses now; operatorScope: "ever" = every supplier that ever shared revenue with them, in any stake status, with all its events. Give one list.',
             "events": "Omit for all, or a list of: stake, unstake, unbonding_begin, unbonding_end, slash (suppliers), delegate, undelegate (applications and gateways).",
             **ROW_NOTES,
             "before...": "beforeHeight and beforeId: the height and id of the last row of the previous page.",
@@ -907,6 +908,7 @@ GRAPHQL_REGISTRY = {
         name="getClaimsJson",
         description="Claims one by one, newest first: settled ones with relays, estimated relays, claimed and estimated compute units, claimed and settled upokt, minted and overservicing amounts and whether a proof backed them; expired ones (no valid proof in time, a penalty for the supplier) with their expiration_reason. statuses = settled, expired (omitted = both). Filters, combined: suppliers (up to 200), owners or operators; applications and services (up to 200 each). For totals use getSupplierEarningsJson, getApplicationSpendJson, getServiceUsageJson or getSupplierPenaltiesJson.",
         fields_notes={
+            "suppliers/owners/operators": 'suppliers = those (up to 200); owners = the suppliers they own now; operators = the Staked suppliers whose service configs share revenue with those addresses now; operatorScope: "ever" = every supplier that ever shared revenue with them, in any stake status, with all its claims. Give at most one.',
             **ROW_NOTES,
             "before...": "beforeHeight and beforeEventIdx: the height and event_idx of the last row of the previous page.",
             "coverage": COVERAGE_NOTE,
