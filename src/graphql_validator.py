@@ -1,22 +1,36 @@
 """GraphQL query validation."""
 
+import logging
+import time
 from typing import Dict, List, Optional, Set, Tuple
 
+import requests
 from graphql import (
     DocumentNode,
     FieldNode,
     FragmentDefinitionNode,
     FragmentSpreadNode,
     GraphQLError,
+    GraphQLSchema,
     InlineFragmentNode,
     IntValueNode,
+    ListValueNode,
+    ObjectValueNode,
     OperationDefinitionNode,
     SelectionSetNode,
+    ValueNode,
+    build_client_schema,
+    get_introspection_query,
     parse,
     print_ast,
+    specified_rules,
+    validate,
 )
+from graphql.validation import NoDeprecatedCustomRule
 
-from src.graphql_client import GRAPHQL_REGISTRY
+from src.graphql_client import GRAPHQL_REGISTRY, POCKET_NETWORK_DATA_ENDPOINT
+
+logger = logging.getLogger(__name__)
 
 # Fields that read raw payout tables: a broad filter on them scans millions of rows. The settlement catalog answers
 # the same questions from precomputed tables.
@@ -59,8 +73,103 @@ CATALOG_FUNCTIONS = frozenset(
         "getAppAutoUnstakes",
         "getSupplierProofs",
         "getParamHistory",
+        "getClaims",
+        "getActorLifecycle",
+        "getBlockStats",
+        "getRelayMiningDifficulty",
+        "getCreatedClaims",
+        "getMorseClaims",
     }
 )
+# The lists and functions the closed pocketdex schema drops (docs/graphql-migration.md), with what replaces them. The
+# event and message tables not named here are hidden too (EVENT_PREFIXES).
+HIDDEN_FIELDS = {
+    "eventClaimSettleds": "getClaimsJson (one row per claim); sums in getSupplierEarningsJson, getApplicationSpendJson, "
+    "getServiceUsageJson",
+    "eventClaimExpireds": 'getClaimsJson with statuses: ["expired"]; totals in getSupplierPenaltiesJson',
+    "msgStakeApplications": 'getActorLifecycleJson with kind: "application"; current stake in applications',
+    "msgStakeGateways": 'getActorLifecycleJson with kind: "gateway"; current stake in gateways',
+    "msgStakeSupplierServices": "supplierServiceConfigs",
+    "eventRelayMiningDifficultyUpdateds": "getRelayMiningDifficultyJson (the current value is its newest row, rowLimit: 1)",
+    "eventApplicationOverserviceds": "getApplicationSpendJson or getOverservicedByAddressesAndTime",
+    "eventGatewayUnbondingBegins": 'getActorLifecycleJson with kind: "gateway"',
+    "eventGatewayUnbondingEnds": 'getActorLifecycleJson with kind: "gateway"',
+    "eventSupplierUnbondingBegins": 'getActorLifecycleJson with kind: "supplier"',
+    "eventSupplierUnbondingEnds": 'getActorLifecycleJson with kind: "supplier"',
+    "eventApplicationUnbondingBegins": 'getActorLifecycleJson with kind: "application"',
+    "eventApplicationUnbondingEnds": 'getActorLifecycleJson with kind: "application"',
+    "eventSupplierSlasheds": 'getActorLifecycleJson with kind: "supplier" and events: ["slash"]; totals in '
+    "getSupplierPenaltiesJson",
+    "getSupplierStatsByDomains": 'getSupplierFleetList with domains, stakeStatuses: ["Staked"] and bySupplier: false',
+}
+EVENT_PREFIXES = ("event", "msg")
+EVENT_HINT = "the event and message tables are hidden: use the function that answers the question (introspect Query)"
+# Sums and groupings over a list, which the API no longer serves, and where to find them instead.
+AGGREGATE_FIELDS = ("aggregates", "groupedAggregates")
+AGGREGATE_HINT = (
+    "use totalCount for a count, a function that sums the rows (getSupplierFleetList, getApplicationFleetList, "
+    "getServiceSummaryList, getBlockStatsJson, getMorseClaimSummaryList or the settlement catalog ...Json), or the "
+    "newest blocks row's staked* and unstaking* columns"
+)
+# The operators of the filter types on a column (pocketdex schema, 2026-10-14). A filter key whose value holds anything
+# else is a filter through a relation, which the API no longer serves.
+FILTER_OPERATORS = frozenset(
+    {
+        "anyEqualTo",
+        "anyGreaterThan",
+        "anyGreaterThanOrEqualTo",
+        "anyLessThan",
+        "anyLessThanOrEqualTo",
+        "anyNotEqualTo",
+        "containedBy",
+        "contains",
+        "containsAllKeys",
+        "containsAnyKeys",
+        "containsKey",
+        "distinctFrom",
+        "distinctFromInsensitive",
+        "endsWith",
+        "endsWithInsensitive",
+        "equalTo",
+        "equalToInsensitive",
+        "greaterThan",
+        "greaterThanInsensitive",
+        "greaterThanOrEqualTo",
+        "greaterThanOrEqualToInsensitive",
+        "in",
+        "inInsensitive",
+        "includes",
+        "includesInsensitive",
+        "isNull",
+        "lessThan",
+        "lessThanInsensitive",
+        "lessThanOrEqualTo",
+        "lessThanOrEqualToInsensitive",
+        "like",
+        "likeInsensitive",
+        "notDistinctFrom",
+        "notDistinctFromInsensitive",
+        "notEndsWith",
+        "notEndsWithInsensitive",
+        "notEqualTo",
+        "notEqualToInsensitive",
+        "notIn",
+        "notInInsensitive",
+        "notIncludes",
+        "notIncludesInsensitive",
+        "notLike",
+        "notLikeInsensitive",
+        "notStartsWith",
+        "notStartsWithInsensitive",
+        "overlaps",
+        "startsWith",
+        "startsWithInsensitive",
+    }
+)
+FILTER_LOGIC = ("and", "or", "not")
+# The fields of a list (connection) that hold its rows; any other field with a selection set below a row is a relation
+# to another entity.
+CONNECTION_FIELDS = ("nodes", "edges", "pageInfo", "totalCount")
 # Largest page a connection may ask for; the API caps a connection at this many rows without saying so.
 MAX_FIRST = 1000
 # Most fields the guards visit in one query. Fragments spread in nested fields multiply the visits (2^n for n nested
@@ -99,9 +208,44 @@ def _child_fields(
     return fields
 
 
+def _relation_filter(value: ValueNode) -> Optional[str]:
+    """Why a filter value filters through a relation (or holds a misspelled operator, which reads the same), else
+    None."""
+    if isinstance(value, ListValueNode):
+        return next((error for error in map(_relation_filter, value.values) if error), None)
+    if not isinstance(value, ObjectValueNode):
+        return None
+    for entry in value.fields:
+        key = entry.name.value
+        if key in FILTER_LOGIC:
+            error = _relation_filter(entry.value)
+            if error:
+                return error
+        elif key.endswith("Exist"):
+            return f'"{key}" tests a relation'
+        elif isinstance(entry.value, ObjectValueNode):
+            inner = next((f.name.value for f in entry.value.fields if f.name.value not in FILTER_OPERATORS), None)
+            if inner:
+                return (
+                    f'"{key}" holds "{inner}", which is not an operator (equalTo, in, greaterThanOrEqualTo, '
+                    "includes, isNull, ...), so it filters through a relation"
+                )
+    return None
+
+
 def _check_field(
-    field: FieldNode, fragments: Dict[str, FragmentDefinitionNode], path: Tuple[str, ...], visited: List[int]
+    field: FieldNode,
+    fragments: Dict[str, FragmentDefinitionNode],
+    path: Tuple[str, ...],
+    visited: List[int],
+    level: str = "root",
 ) -> Optional[str]:
+    """Why the field must not be sent, or None.
+
+    level says where the field sits: root (a field of Query), connection (a field of a list: nodes, edges, totalCount),
+    edge (a field of edges), row (a field of one entity: a node, or what a lookup by key returns) or free (below
+    introspection, _metadata or pageInfo, where no relation rule applies).
+    """
     # visited counts the fields checked so far in the query (one shared counter).
     visited[0] += 1
     if visited[0] > MAX_VISITED_FIELDS:
@@ -122,8 +266,29 @@ def _check_field(
             '(same arguments and JSON, which a newer API puts under "data" next to a "range"), or the settlement '
             "catalog (getIncomeJson, getSupplyFlowsJson)."
         )
+    if name in AGGREGATE_FIELDS:
+        return f'"{name}" is not served: {AGGREGATE_HINT}.'
+    if name == "nodeId" or (level == "root" and (name == "node" or name.endswith("ByNodeId"))):
+        return f'"{name}" is not served: look an entity up by its key, e.g. supplier(id: "pokt1...") or block(id: "1").'
+    if level == "root" and name in HIDDEN_FIELDS:
+        return f'"{name}" is no longer served: use {HIDDEN_FIELDS[name]}.'
+    if level == "root" and name.startswith(EVENT_PREFIXES):
+        return f'"{name}" is no longer served: {EVENT_HINT}.'
+    for arg in field.arguments:
+        error = _relation_filter(arg.value) if arg.name.value == "filter" else None
+        if error:
+            return (
+                f'the filter of "{name}" is not served: {error}. Filter on the entity\'s own columns, such as its id '
+                "columns (supplierId, applicationId, blockId), after querying the other entity on its own."
+            )
     if field.selection_set is None:
         return None
+    if level == "row":
+        return (
+            f'"{name}" is a relation to another entity, which is not served: select its id column (e.g. {name}Id) '
+            "and query that entity as its own root field filtered by that id, in the same query or the next one "
+            '(e.g. balances(filter: {accountId: {equalTo: "pokt1..."}}, first: 10)).'
+        )
 
     children = _child_fields(field.selection_set, fragments, path)
     if any(child.name.value in ("nodes", "edges") for child, _ in children):
@@ -131,11 +296,23 @@ def _check_field(
         if not isinstance(first, IntValueNode) or not 0 < int(first.value) <= MAX_FIRST:
             return (
                 f'"{name}" selects nodes/edges and needs a literal "first" between 1 and {MAX_FIRST}; '
-                "for larger answers use totalCount/aggregates, paginate with offset, or the matching ...Json function."
+                "for a count use totalCount; for a sum, the function that sums; for more rows, page by keyset "
+                '(orderBy: ID_ASC with filter {id: {greaterThan: "<last id>"}}), never by offset.'
             )
 
+    if level == "root" and name.startswith("_"):
+        child_level = "free"
+    elif level == "root":
+        is_list = any(child.name.value in CONNECTION_FIELDS + AGGREGATE_FIELDS for child, _ in children)
+        child_level = "connection" if is_list else "row"
+    elif level == "connection":
+        child_level = {"nodes": "row", "edges": "edge"}.get(name, "free")
+    elif level == "edge":
+        child_level = "row" if name == "node" else "free"
+    else:
+        child_level = "free"
     for child, child_path in children:
-        error = _check_field(child, fragments, child_path, visited)
+        error = _check_field(child, fragments, child_path, visited, child_level)
         if error:
             return error
     return None
@@ -162,6 +339,52 @@ def check_query_guards(document: DocumentNode) -> Optional[str]:
     return None
 
 
+# The live schema, built from one introspection of the API and rebuilt once it is older than SCHEMA_TTL_SECONDS (the
+# introspection tools' TTL), so that a long-running server follows the fields the API adds, deprecates and removes. A
+# failed introspection keeps the schema it had (none at first) and is tried again after SCHEMA_RETRY_SECONDS.
+SCHEMA_TTL_SECONDS = 3600
+SCHEMA_RETRY_SECONDS = 60
+_schema: Optional[GraphQLSchema] = None
+_schema_fetched_at: Optional[float] = None
+
+
+def _fetch_schema() -> GraphQLSchema:
+    response = requests.post(
+        POCKET_NETWORK_DATA_ENDPOINT,
+        json={"query": get_introspection_query(descriptions=False)},
+        headers={"Content-Type": "application/json"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    return build_client_schema(response.json()["data"])
+
+
+def live_schema() -> Optional[GraphQLSchema]:
+    """The API schema, or None while it cannot be introspected (then only the guards check a query)."""
+    global _schema, _schema_fetched_at
+    now = time.monotonic()
+    if _schema_fetched_at is None or now - _schema_fetched_at > SCHEMA_TTL_SECONDS:
+        try:
+            _schema = _fetch_schema()
+            _schema_fetched_at = now
+        except Exception as e:
+            logger.warning("GraphQL schema introspection failed, checking queries with the guards only: %s", e)
+            _schema_fetched_at = now - SCHEMA_TTL_SECONDS + SCHEMA_RETRY_SECONDS
+    return _schema
+
+
+def check_against_schema(document: DocumentNode) -> Optional[str]:
+    """Why the API would refuse the query, or None: every field, argument and type it uses must exist, and none may be
+    deprecated (a deprecated field is about to leave the API; its deprecation reason names the replacement)."""
+    schema = live_schema()
+    if schema is None:
+        return None
+    errors = validate(schema, document, [*specified_rules, NoDeprecatedCustomRule])
+    if not errors:
+        return None
+    return "Query refused by the API schema: " + " ".join(error.message for error in errors[:5])
+
+
 def validate_graphql_query(query: str, selected_method: str) -> Tuple[bool, str, Optional[str]]:
     """
     Validate a GraphQL query for format correctness.
@@ -179,9 +402,7 @@ def validate_graphql_query(query: str, selected_method: str) -> Tuple[bool, str,
         # Parse the query to validate syntax
         document = parse(query)
 
-        # TODO: Some queries pass this check with some fields that are not valid, like using "gte" in place of "greaterThanOrEqualTo". This leads to a query and retry that should be avoided.
-
-        guard_error = check_query_guards(document)
+        guard_error = check_query_guards(document) or check_against_schema(document)
         if guard_error:
             return False, "", guard_error
 

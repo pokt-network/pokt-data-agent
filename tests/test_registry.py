@@ -1,7 +1,7 @@
 import unittest
 
 from src.graphql_client import COVERAGE_NOTE, GRAPHQL_REGISTRY
-from src.graphql_validator import RAW_FIELD_PREFIXES
+from src.graphql_validator import EVENT_PREFIXES, HIDDEN_FIELDS, RAW_FIELD_PREFIXES
 from src.query_sub_agents import ALL_SUBAGENTS
 
 
@@ -18,6 +18,10 @@ class TestRegistry(unittest.TestCase):
 
     def test_no_raw_payout_table_is_recommended(self):
         self.assertFalse([name for name in GRAPHQL_REGISTRY if name.startswith(RAW_FIELD_PREFIXES)])
+
+    def test_nothing_the_api_stops_serving_is_recommended(self):
+        hidden = [name for name in GRAPHQL_REGISTRY if name in HIDDEN_FIELDS or name.startswith(EVENT_PREFIXES)]
+        self.assertFalse(hidden)
 
     def test_settlement_functions_state_the_coverage_rule(self):
         # The functions that read the settlement tables raise an error outside their coverage; the model must be

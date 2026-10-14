@@ -14,7 +14,7 @@ from src.graphql_client import (
     PocketNetworkAPIClient,
     range_notes,
 )
-from src.graphql_validator import LIVE_REWARD_FIELDS, MAX_FIRST, check_query_guards
+from src.graphql_validator import LIVE_REWARD_FIELDS, MAX_FIRST, check_against_schema, check_query_guards
 from src.query_sub_agents import ALL_SUBAGENTS
 from src.rpc_client import (
     POCKET_NETWORK_RPC_ENDPOINT,
@@ -182,6 +182,13 @@ Guards, checked before the query is sent:
 - The row variants of the settlement catalog (getIncomeList, ..., moneyCoverageList) are refused: use the ...Json
   function of the same name, which says the range it covers.
 - Every connection that selects "nodes" or "edges" needs a literal "first" between 1 and {MAX_FIRST}.
+- What the API no longer serves is refused, with what to use instead: the event and message tables
+  (eventClaimSettleds, msgStake..., ...), relations from one entity to another (select the id column, e.g. blockId,
+  and query the other entity on its own), filters through a relation, aggregates and groupedAggregates (use totalCount
+  or a function that sums: getSupplierFleetList, getApplicationFleetList, getServiceSummaryList, getBlockStatsJson,
+  getMorseClaimSummaryList, the settlement catalog), node, nodeId and ...ByNodeId (look entities up by key).
+- The query is checked against the live API schema: unknown fields, arguments or types, and fields marked deprecated
+  (about to leave the API; the message names the replacement), are refused.
 A result longer than {MAX_RESULT_CHARS} characters is cut, and the error string says so.
 
 The settlement catalog and legacy... functions either raise an error for a range their data does not cover yet,
@@ -203,7 +210,8 @@ EXECUTE_GRAPHQL_NAME = "data_execute_graphql"
 @tool(EXECUTE_GRAPHQL_NAME, description=EXECUTE_GRAPHQL_DESCRIPTION)
 def execute_graphql(query: str) -> Tuple[bool, Any, str | None]:
     try:
-        guard_error = check_query_guards(parse(query))
+        document = parse(query)
+        guard_error = check_query_guards(document) or check_against_schema(document)
     except GraphQLError as e:
         return False, None, f"GraphQL validation error: {e}"
     except RecursionError:
