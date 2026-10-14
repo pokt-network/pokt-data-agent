@@ -389,7 +389,8 @@ For GraphQL: use one of the given fields with appropriate filters and aggregatio
 Keep queries simple. Check for pagination. Pass numerical fields in quotes.
 Every connection that selects "nodes" or "edges" needs a "first" between 1 and 1000; for counts use totalCount, for sums the function that sums (no aggregates).
 Do not nest one entity inside another (no relations) nor filter through one: select the id column (e.g. blockId, supplierId) and query the other entity as its own root field, filtered by that id.
-Settlement catalog functions (get...Json, legacy..., moneyCoverageJson) take a [start, end) range in UTC with "Z". Their bucket allows hour up to 7 days, day up to 92 days, week up to 366 days. A range before their coverage is not covered yet, never 0: do not answer it with another function.
+To read more rows than one page, page by keyset, never by offset: an entity list with a fixed orderBy (ID_ASC when nothing else is asked), pageInfo {{ hasNextPage endCursor }} and after: <endCursor>, every page with the same blockHeight (the _metadata lastProcessedHeight read once); a row function (getClaimsJson, getActorLifecycleJson, getRelayMiningDifficultyJson) with its before... arguments. A page that comes back full may not be the last one: never present it as the whole list.
+Settlement catalog functions (get...Json, legacy..., moneyCoverageJson) take a [start, end) range in UTC with "Z". Their bucket allows hour up to 7 days, day up to 92 days, week up to 366 days. Their answer says the part of the range it covers ("range"): a part before or after it, or in a gap, is not covered yet, never 0, and a 0 or a missing row there is not covered yet either: do not answer it with another function.
 
 {output_instructions}
 

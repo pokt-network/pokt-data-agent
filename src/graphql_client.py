@@ -355,7 +355,7 @@ LEGACY_NOTES = {"coverage": COVERAGE_NOTE}
 ROW_NOTES = {
     "rangeStart/rangeEnd": "Optional range [start, end) in UTC with an explicit zone, e.g. 2026-10-01T00:00:00Z; omit both for the whole history.",
     "rowLimit": "Rows per call, newest first: default 100, at most 1000. For the next page pass the last row's keys as the before... arguments; a page shorter than rowLimit is the last one.",
-    "result": '{"range": {...}, "data": [rows]}: the rows in "data" with snake_case keys, numbers as strings (amounts in upokt), and the part of the range the data covers in "range".',
+    "result": '{"range": {...}, "data": [rows]}: the rows in "data" with snake_case keys, numbers as strings (amounts in upokt), and the part of the range the data covers in "range". No rows, or a missing row, in a part of the range outside covered_from / covered_to or in a gap is not covered yet, never none or 0.',
 }
 # Rules shared by the functions that answer the current state (getSupplierFleetList, getApplicationFleetList,
 # getServiceSummaryList, getMorseClaimSummaryList): their rows are selected like a list's fields.
@@ -477,9 +477,14 @@ GRAPHQL_REGISTRY = {
         examples=[
             "# Staked suppliers: count (their total stake: getSupplierFleetList)\n"
             "query { suppliers(filter: {stakeStatus: {equalTo: Staked}}) { totalCount } }",
-            "# Paginated supplier list with owner/operator and stake\n"
-            "query { suppliers(first: 20, offset: 0, orderBy: [STAKE_STATUS_ASC]) { totalCount nodes { id ownerId "
-            "operatorId stakeAmount stakeStatus } } }",
+            "# Supplier list, first page, with owner/operator and stake\n"
+            "query { suppliers(first: 100, orderBy: ID_ASC) { totalCount pageInfo { hasNextPage endCursor } "
+            "nodes { id ownerId operatorId stakeAmount stakeStatus } } }",
+            "# Next page of a walk over all suppliers: after = the previous page's endCursor, and on every page the same "
+            "blockHeight, the _metadata lastProcessedHeight read once before the first page (stop when hasNextPage is "
+            "false; the rows must add up to totalCount)\n"
+            'query { suppliers(first: 100, orderBy: ID_ASC, blockHeight: "964638", after: "<endCursor>") { totalCount '
+            "pageInfo { hasNextPage endCursor } nodes { id ownerId operatorId stakeAmount stakeStatus } } }",
         ],
     ),
     "getComputeUnitsToTokensMultiplierEvolution": QueryFieldInfo(
@@ -604,10 +609,10 @@ GRAPHQL_REGISTRY = {
             "counts": "Successful and failed transactions in a time window: getBlockStatsJson.",
         },
         examples=[
-            "# Transaction history of an address (most recent first)\n"
-            'query { transactions(first: 20, offset: 0, filter: {signerAddress: {equalTo: "pokt1..."}}, '
-            "orderBy: BLOCK_ID_DESC) { totalCount nodes { id code blockId gasUsed gasWanted "
-            "signerAddress fees amountOfMessages } } }",
+            "# Transaction history of an address (most recent first; older ones: the same query with after: <endCursor>)\n"
+            'query { transactions(first: 20, filter: {signerAddress: {equalTo: "pokt1..."}}, '
+            "orderBy: [BLOCK_ID_DESC, ID_DESC]) { totalCount pageInfo { hasNextPage endCursor } nodes { id code blockId "
+            "gasUsed gasWanted signerAddress fees amountOfMessages } } }",
             "# Look up a transaction by hash\n"
             'query { transactions(filter: {id: {equalTo: "<TX_HASH_64_CHAR_HEX>"}}, first: 1) '
             "{ nodes { id code codespace blockId signerAddress fees memo } } }",
@@ -706,9 +711,9 @@ GRAPHQL_REGISTRY = {
             "applicationStakeAmount": "Claimable application stake in upokt.",
         },
         examples=[
-            "# Paginated claimable-accounts list with claim status and destination\n"
-            "query { morseClaimableAccounts(first: 20, orderBy: [CLAIMED_DESC, CLAIMED_AT_ID_DESC]) { totalCount "
-            "nodes { id shannonDestAddress claimed claimedAtHeight: claimedAtId transactionId "
+            "# Claimable-accounts list with claim status and destination (next page: after: <endCursor>)\n"
+            "query { morseClaimableAccounts(first: 20, orderBy: [CLAIMED_DESC, CLAIMED_AT_ID_DESC, ID_ASC]) { totalCount "
+            "pageInfo { hasNextPage endCursor } nodes { id shannonDestAddress claimed claimedAtHeight: claimedAtId transactionId "
             "unstakedBalanceAmount supplierStakeAmount applicationStakeAmount } } }",
         ],
     ),
@@ -867,7 +872,7 @@ GRAPHQL_REGISTRY = {
         fields_notes={
             "rangeStart/rangeEnd": "The range [start, end) in UTC with an explicit zone, e.g. 2026-10-01T00:00:00Z.",
             "bucket": CATALOG_NOTES["bucket"],
-            "result": '{"range": {...}, "data": [rows]}: one row per bucket in "data" with snake_case keys, numbers as strings.',
+            "result": '{"range": {...}, "data": [rows]}: one row per bucket in "data" with snake_case keys, numbers as strings. A bucket outside covered_from / covered_to or in a gap is not covered yet, never 0.',
         },
         examples=[
             "# Network totals and averages over a time window (one row)\n"
@@ -893,6 +898,9 @@ GRAPHQL_REGISTRY = {
             "# Stake history (stake, unstake, unbonding) of an application\n"
             'query { getActorLifecycleJson(kind: "application", addresses: ["pokt1..."], '
             'events: ["stake", "unstake", "unbonding_begin", "unbonding_end"], rowLimit: 100) }',
+            "# Next page of the slashes: the height and id of the last row of the previous page\n"
+            'query { getActorLifecycleJson(kind: "supplier", addresses: ["pokt1..."], events: ["slash"], rowLimit: 20, '
+            'beforeHeight: "964073", beforeId: "964073-finalize_block-17563") }',
         ],
     ),
     "getClaimsJson": QueryFieldInfo(
@@ -909,6 +917,9 @@ GRAPHQL_REGISTRY = {
             'rangeEnd: "2026-06-11T00:00:00Z", rowLimit: 100) }',
             "# Expired claims of a supplier\n"
             'query { getClaimsJson(suppliers: ["pokt1..."], statuses: ["expired"], rowLimit: 100) }',
+            "# Next page: the height and event_idx of the last row of the previous page\n"
+            'query { getClaimsJson(suppliers: ["pokt1..."], statuses: ["expired"], rowLimit: 100, '
+            'beforeHeight: "964073", beforeEventIdx: 17563) }',
         ],
     ),
     "getMorseClaimSummaryList": QueryFieldInfo(

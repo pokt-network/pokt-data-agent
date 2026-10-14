@@ -294,11 +294,19 @@ def _check_field(
     children = _child_fields(field.selection_set, fragments, path)
     if any(child.name.value in ("nodes", "edges") for child, _ in children):
         first = next((arg.value for arg in field.arguments if arg.name.value == "first"), None)
+        offset = next((arg.value for arg in field.arguments if arg.name.value == "offset"), None)
+        if offset is not None and not (isinstance(offset, IntValueNode) and int(offset.value) == 0):
+            # Rows written or removed between two pages shift the offsets: rows are skipped or repeated, silently.
+            return (
+                f'"{name}" pages by offset, which skips or repeats rows when the list changes between pages: page by '
+                "keyset instead, with a fixed orderBy (e.g. ID_ASC), pageInfo { hasNextPage endCursor } and after: "
+                '"<endCursor>" (the same blockHeight on every page of a walk).'
+            )
         if not isinstance(first, IntValueNode) or not 0 < int(first.value) <= MAX_FIRST:
             return (
                 f'"{name}" selects nodes/edges and needs a literal "first" between 1 and {MAX_FIRST}; '
                 "for a count use totalCount; for a sum, the function that sums; for more rows, page by keyset "
-                '(orderBy: ID_ASC with filter {id: {greaterThan: "<last id>"}}), never by offset.'
+                '(orderBy: ID_ASC, pageInfo { hasNextPage endCursor }, after: "<endCursor>"), never by offset.'
             )
 
     if level == "root" and name.startswith("_"):

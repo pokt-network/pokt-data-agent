@@ -132,6 +132,23 @@ class TestQueryGuards(unittest.TestCase):
             with self.subTest(query=query):
                 self.assertIsNone(guard(query))
 
+    def test_lists_are_paged_by_keyset_not_offset(self):
+        for query in (
+            "{ suppliers(first: 100, offset: 100) { nodes { id } } }",
+            "query ($o: Int) { transactions(first: 20, offset: $o) { edges { node { id } } } }",
+        ):
+            with self.subTest(query=query):
+                self.assertIn("pages by offset", guard(query))
+        for query in (
+            "{ suppliers(first: 100, offset: 0) { nodes { id } } }",
+            '{ suppliers(first: 100, orderBy: ID_ASC, blockHeight: "964638", after: "abc") '
+            "{ totalCount pageInfo { hasNextPage endCursor } nodes { id } } }",
+            # a function's rows are not a live list's connection
+            '{ getSupplierFleetList(owners: ["pokt1x"], first: 1000, offset: 1000) { supplierId } }',
+        ):
+            with self.subTest(query=query):
+                self.assertIsNone(guard(query))
+
     def test_aggregates_are_refused(self):
         for query in (
             "{ suppliers(filter: {stakeStatus: {equalTo: Staked}}) { totalCount aggregates { sum { stakeAmount } } } }",
