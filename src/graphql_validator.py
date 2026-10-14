@@ -34,6 +34,7 @@ from graphql import (
     build_client_schema,
     get_introspection_query,
     get_named_type,
+    is_enum_type,
     is_input_object_type,
     is_interface_type,
     is_object_type,
@@ -148,8 +149,8 @@ AGGREGATE_HINT = (
     "newest blocks row's staked* and unstaking* columns"
 )
 # The operators of the filter types on a column (pocketdex schema, 2026-10-14). A filter key whose value holds anything
-# else is a filter through a relation, which the API no longer serves. The live schema's operators are used instead
-# when it has been introspected: this list is the fallback.
+# else is a filter through a relation, which the API no longer serves. This list is the fallback before the live schema
+# loads; then the schema-typed walk reads each filter type's own operators.
 FILTER_OPERATORS = frozenset(
     {
         "anyEqualTo",
@@ -396,15 +397,25 @@ def _check_field(
     return None
 
 
+def check_query(document: DocumentNode) -> Optional[str]:
+    """Why an LLM-generated query must not be sent, or None when it may be: the guards, then the API schema, both
+    against one snapshot of the live schema. Raises what check_query_guards raises."""
+    facts = _live_facts()
+    return _guards(document, facts) or _schema_errors(document, facts)
+
+
 def check_query_guards(document: DocumentNode) -> Optional[str]:
     """Return why an LLM-generated query must not be sent, or None when it may be.
 
     Raises GraphQLError for a fragment that reaches itself, directly or through nested fields, and for a query that
     expands to more than MAX_VISITED_FIELDS fields or nests deeper than the recursion limit.
     """
+    return _guards(document, _live_facts())
+
+
+def _guards(document: DocumentNode, facts: Optional["SchemaFacts"]) -> Optional[str]:
     fragments = {d.name.value: d for d in document.definitions if isinstance(d, FragmentDefinitionNode)}
     visited = [0]
-    facts = _live
     try:
         for definition in document.definitions:
             if isinstance(definition, OperationDefinitionNode):
@@ -435,8 +446,9 @@ def _column_order_values(columns: List[str]) -> Set[str]:
 class _ClosedSchemaVisitor(Visitor):
     """Walks a query with the live schema's types and stops at the first thing the closed schema does not serve: a
     field of an entity whose type is an object (a relation), a filter field whose type is another entity's filter or a
-    to-many filter (or tests that a related row exists), and an orderBy value that is not a column of the list's own
-    entity (a sum or count over a relation)."""
+    to-many filter (or tests that a related row exists), a key of a column filter that is not one of its operators (a
+    misspelled one), and an orderBy value that the pruned schema does not hold (prune_introspection keeps the columns of
+    the list's own entity; the rest sort by a relation)."""
 
     def __init__(self, type_info: TypeInfo, facts: "SchemaFacts"):
         super().__init__()
@@ -462,31 +474,32 @@ class _ClosedSchemaVisitor(Visitor):
     def enter_object_field(self, node, *_):
         parent = get_named_type(self.type_info.get_parent_input_type())
         key = node.name.value
+        name = self.fields[-1] if self.fields else "the query"
+        if parent is not None and parent.name in self.facts.column_filters and key not in parent.fields:
+            self.error = (
+                f'the filter of "{name}" is refused: "{key}" is not an operator of {parent.name} '
+                f"({', '.join(parent.fields)})."
+            )
+            return BREAK
         if parent is None or parent.name not in self.facts.entity_filters or key in FILTER_LOGIC:
             return None
         target = get_named_type(self.type_info.get_input_type())
         exists = key.endswith("Exist") and key[: -len("Exist")] in parent.fields
         if exists or (target is not None and target.name in self.facts.relation_filters):
-            name = self.fields[-1] if self.fields else "the query"
             self.error = f'the filter of "{name}" is refused: "{key}" filters through a relation. {FILTER_HINT}'
             return BREAK
         return None
 
     def enter_argument(self, node, *_):
-        if node.name.value != "orderBy":
-            return None
-        field = self.type_info.get_field_def()
-        entity = self.facts.list_entity(field.type) if field is not None else None
-        if entity is None:
+        argument = self.type_info.get_argument()
+        order = get_named_type(argument.type) if argument is not None and node.name.value == "orderBy" else None
+        if not is_enum_type(order):
             return None
         values = node.value.values if isinstance(node.value, ListValueNode) else [node.value]
-        allowed = self.facts.order_values[entity]
         for value in values:
-            if isinstance(value, EnumValueNode) and value.value not in allowed:
-                self.error = (
-                    f'"{self.fields[-1] if self.fields else entity}" orders by {value.value}, which is not one of '
-                    f"its own columns ({entity}): {ORDER_HINT}"
-                )
+            if isinstance(value, EnumValueNode) and value.value not in order.values:
+                name = self.fields[-1] if self.fields else "the query"
+                self.error = f'"{name}" orders by {value.value}, which is not one of its own columns: {ORDER_HINT}'
                 return BREAK
         return None
 
@@ -508,9 +521,9 @@ SCHEMA_RETRY_SECONDS = 60
 
 
 class SchemaFacts:
-    """The live schema, the operators of its filter types on a column, the deprecation reasons of its root fields, and
-    what the schema-typed walk needs: its entities (the types with a node id), their filter types and the filter types
-    of their relations, and the orderBy values of each entity's own columns."""
+    """The live schema (pruned), the deprecation reasons of its root fields, and what the schema-typed walk needs: its
+    entities (the types with a node id), their filter types, the filter types of their relations, and the filter types
+    on a column."""
 
     def __init__(self, schema: GraphQLSchema):
         self.schema = schema
@@ -524,28 +537,13 @@ class SchemaFacts:
         self.relation_filters = self.entity_filters | frozenset(
             name for name, type_ in schema.type_map.items() if is_input_object_type(type_) and "ToMany" in name
         )
-        self.order_values = {
-            name: _column_order_values(
-                [
-                    field_name
-                    for field_name, field in schema.type_map[name].fields.items()
-                    if not (is_object_type(get_named_type(field.type)) or is_interface_type(get_named_type(field.type)))
-                ]
-            )
-            for name in self.entities
-        }
-        self.operators = (
-            frozenset(
-                name
-                for type_ in schema.type_map.values()
-                if isinstance(type_, GraphQLInputObjectType)
-                and type_.name.endswith("Filter")
-                and "ToMany" not in type_.name
-                and "Aggregate" not in type_.name
-                and not set(FILTER_LOGIC) & set(type_.fields)
-                for name in type_.fields
-            )
-            or FILTER_OPERATORS
+        self.column_filters = frozenset(
+            name
+            for name, type_ in schema.type_map.items()
+            if isinstance(type_, GraphQLInputObjectType)
+            and name.endswith("Filter")
+            and name not in self.relation_filters
+            and not set(FILTER_LOGIC) & set(type_.fields)
         )
         self.deprecations = {
             name: field.deprecation_reason
@@ -553,19 +551,17 @@ class SchemaFacts:
             if field.deprecation_reason
         }
 
-    def list_entity(self, type_) -> Optional[str]:
-        """The entity whose rows a list (connection) type holds, or None for any other type."""
-        named = get_named_type(type_)
-        nodes = named.fields.get("nodes") if is_object_type(named) else None
-        entity = get_named_type(nodes.type) if nodes is not None else None
-        return entity.name if entity is not None and entity.name in self.entities else None
-
 
 # The types of what the closed schema drops wholesale and the guards refuse by name (aggregates, group-bys, the
 # many-to-many connections), and the orderBy values over relations: about two thirds of the introspection. They are
 # pruned before the schema is built, with every field that refers to them, so that they cost no memory; a query that
 # uses them is refused by the guards first, or else by the schema check as unknown.
-PRUNED_TYPES = re.compile(r"Aggregate|GroupBy|Having|ManyToMany")
+PRUNED_TYPES = re.compile(
+    r"(Aggregates|AggregatesFilter|AggregateFilter|GroupBy|ManyToManyConnection|ManyToManyEdge|Having(Sum|DistinctCount"
+    r"|Min|Max|Average|StddevSample|StddevPopulation|VarianceSample|VariancePopulation)?Input)$|^Having[A-Z][a-z]+Filter$"
+)
+# Bumped whenever prune_introspection changes what it keeps: a cache file of another version is not read.
+PRUNE_VERSION = 1
 
 
 def _named(type_ref: Dict[str, Any]) -> str:
@@ -658,24 +654,30 @@ SCHEMA_CACHE_PATH = os.getenv("POCKET_NETWORK_SCHEMA_CACHE") or os.path.join(
 )
 
 
-def _introspection() -> Dict[str, Any]:
-    """The pruned introspection: from the disk cache while it is younger than the TTL, else from the API."""
+def _introspection() -> Tuple[Dict[str, Any], float]:
+    """The pruned introspection and when it was taken (epoch seconds): from the disk cache while it is younger than the
+    TTL and of this PRUNE_VERSION, else from the API."""
     try:
-        if time.time() - os.path.getmtime(SCHEMA_CACHE_PATH) < SCHEMA_TTL_SECONDS:
+        written_at = os.path.getmtime(SCHEMA_CACHE_PATH)
+        if time.time() - written_at < SCHEMA_TTL_SECONDS:
             with open(SCHEMA_CACHE_PATH) as cached:
-                return json.load(cached)
-    except (OSError, ValueError):
+                content = json.load(cached)
+            if content.get("version") == PRUNE_VERSION:
+                return content["introspection"], written_at
+    except (OSError, ValueError, AttributeError, KeyError):
         pass
     data = prune_introspection(tools_introspection._introspect(get_introspection_query(descriptions=False)))
+    written_at = time.time()
     try:
         os.makedirs(os.path.dirname(SCHEMA_CACHE_PATH), exist_ok=True)
         partial = f"{SCHEMA_CACHE_PATH}.{os.getpid()}.tmp"
         with open(partial, "w") as cache:
-            json.dump(data, cache)
+            json.dump({"version": PRUNE_VERSION, "introspection": data}, cache)
         os.replace(partial, SCHEMA_CACHE_PATH)
+        written_at = os.path.getmtime(SCHEMA_CACHE_PATH)
     except OSError as e:
         logger.warning("Could not cache the GraphQL schema on disk: %s", e)
-    return data
+    return data, written_at
 
 
 _live: Optional[SchemaFacts] = None
@@ -684,16 +686,20 @@ _refreshing = False
 _refresh_lock = threading.Lock()
 
 
-def _fetch_schema() -> GraphQLSchema:
-    return build_client_schema(_introspection())
+def _fetch_schema() -> Tuple[GraphQLSchema, float]:
+    """The schema and when its introspection was taken (epoch seconds)."""
+    data, taken_at = _introspection()
+    return build_client_schema(data), taken_at
 
 
 def refresh_schema() -> None:
-    """Introspect the API and replace the live schema; on failure keep the one there is."""
+    """Introspect the API and replace the live schema; on failure keep the one there is. The next refresh is due when
+    the introspection it used (maybe another process's, from the disk cache) is SCHEMA_TTL_SECONDS old: one TTL."""
     global _live, _next_refresh_at, _refreshing
     try:
-        _live = SchemaFacts(_fetch_schema())
-        _next_refresh_at = time.monotonic() + SCHEMA_TTL_SECONDS
+        schema, taken_at = _fetch_schema()
+        _live = SchemaFacts(schema)
+        _next_refresh_at = time.monotonic() + max(0.0, taken_at + SCHEMA_TTL_SECONDS - time.time())
     except Exception as e:
         logger.warning("GraphQL schema introspection failed, keeping the schema there was (if any): %s", e)
         _next_refresh_at = time.monotonic() + SCHEMA_RETRY_SECONDS
@@ -702,27 +708,40 @@ def refresh_schema() -> None:
             _refreshing = False
 
 
-def live_schema() -> Optional[GraphQLSchema]:
-    """The last introspected API schema, or None before the first one (then only the guards check a query). Starts a
-    background introspection when the schema is due, unless one is running; never waits for it."""
+def _live_facts() -> Optional[SchemaFacts]:
+    """The last introspected schema facts, or None before the first one (then only the fallback guards check a query).
+    Starts a background introspection when the schema is due, unless one is running; never waits for it."""
     global _refreshing
     with _refresh_lock:
         due = not _refreshing and time.monotonic() >= _next_refresh_at
         if due:
             _refreshing = True
     if due:
-        threading.Thread(target=refresh_schema, name="graphql-schema-refresh", daemon=True).start()
-    facts = _live
+        try:
+            threading.Thread(target=refresh_schema, name="graphql-schema-refresh", daemon=True).start()
+        except Exception as e:
+            logger.warning("Could not start the GraphQL schema introspection: %s", e)
+            with _refresh_lock:
+                _refreshing = False
+    return _live
+
+
+def live_schema() -> Optional[GraphQLSchema]:
+    """The last introspected API schema, or None before the first one; starts a background introspection when due."""
+    facts = _live_facts()
     return facts.schema if facts else None
 
 
 def check_against_schema(document: DocumentNode) -> Optional[str]:
     """Why the API would refuse the query, or None: every field, argument and type it uses must exist, and none may be
     deprecated (a deprecated field is about to leave the API; its deprecation reason names the replacement)."""
-    schema = live_schema()
-    if schema is None:
+    return _schema_errors(document, _live_facts())
+
+
+def _schema_errors(document: DocumentNode, facts: Optional[SchemaFacts]) -> Optional[str]:
+    if facts is None:
         return None
-    errors = validate(schema, document, [*specified_rules, NoDeprecatedCustomRule])
+    errors = validate(facts.schema, document, [*specified_rules, NoDeprecatedCustomRule])
     if not errors:
         return None
     return "Query refused by the API schema: " + " ".join(error.message for error in errors[:5])
@@ -745,7 +764,7 @@ def validate_graphql_query(query: str, selected_method: str) -> Tuple[bool, str,
         # Parse the query to validate syntax
         document = parse(query)
 
-        guard_error = check_query_guards(document) or check_against_schema(document)
+        guard_error = check_query(document)
         if guard_error:
             return False, "", guard_error
 

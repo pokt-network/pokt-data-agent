@@ -14,7 +14,7 @@ from src.graphql_client import (
     PocketNetworkAPIClient,
     range_notes,
 )
-from src.graphql_validator import LIVE_REWARD_FIELDS, MAX_FIRST, check_against_schema, check_query_guards
+from src.graphql_validator import LIVE_REWARD_FIELDS, MAX_FIRST, check_query
 from src.query_sub_agents import ALL_SUBAGENTS
 from src.rpc_client import (
     POCKET_NETWORK_RPC_ENDPOINT,
@@ -218,7 +218,7 @@ EXECUTE_GRAPHQL_NAME = "data_execute_graphql"
 def execute_graphql(query: str) -> Tuple[bool, Any, str | None]:
     try:
         document = parse(query)
-        guard_error = check_query_guards(document) or check_against_schema(document)
+        guard_error = check_query(document)
     except GraphQLError as e:
         return False, None, f"GraphQL validation error: {e}"
     except RecursionError:

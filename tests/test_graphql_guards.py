@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import threading
@@ -398,6 +399,15 @@ SCHEMA = build_schema(
 )
 
 
+# The schema as the agent builds it: pruned of aggregates and relation orderings.
+PRUNED_SCHEMA = build_client_schema(graphql_validator.prune_introspection(introspection_from_schema(SCHEMA)))
+
+
+def fetched():
+    """What _fetch_schema returns: the schema and when it was introspected."""
+    return PRUNED_SCHEMA, time.time()
+
+
 REAL_THREAD = threading.Thread
 
 
@@ -415,7 +425,7 @@ class TestSchemaCheck(unittest.TestCase):
     def setUp(self):
         self.reset()
         self.addCleanup(self.reset)
-        patcher = mock.patch("src.graphql_validator._fetch_schema", return_value=SCHEMA)
+        patcher = mock.patch("src.graphql_validator._fetch_schema", side_effect=fetched)
         self.fetch = patcher.start()
         self.addCleanup(patcher.stop)
         thread = mock.patch("src.graphql_validator.threading.Thread", SyncThread)
@@ -467,8 +477,14 @@ class TestSchemaCheck(unittest.TestCase):
         # an operator the live schema has and the fallback list does not
         query = '{ suppliers(first: 5, filter: {id: {newOperator: "a"}}) { nodes { id } } }'
         self.assertIsNone(guard(query))
+        # a misspelled operator gets the operators of its filter type
+        self.assertIn(
+            '"gte" is not an operator of StringFilter (equalTo, newOperator)',
+            guard('{ suppliers(first: 5, filter: {and: [{id: {gte: "a"}}]}) { nodes { id } } }'),
+        )
         self.reset()
-        self.assertIn('"id" holds "newOperator", which is not an operator', guard(query))
+        with mock.patch("src.graphql_validator._live_facts", return_value=None):
+            self.assertIn('"id" holds "newOperator", which is not an operator', guard(query))
 
     def test_relations_are_refused_by_type(self):
         graphql_validator.refresh_schema()
@@ -554,12 +570,39 @@ class TestSchemaCheck(unittest.TestCase):
                 first = graphql_validator._introspection()
                 second = graphql_validator._introspection()
                 self.assertEqual(first, second)
+                self.assertEqual(second[1], os.path.getmtime(path))
                 self.assertEqual(introspect.call_count, 1)
                 # once older than the TTL, the API is introspected again
                 old = time.time() - graphql_validator.SCHEMA_TTL_SECONDS - 1
                 os.utime(path, (old, old))
                 graphql_validator._introspection()
                 self.assertEqual(introspect.call_count, 2)
+                # a file of another pruning version is not read
+                with open(path, "w") as cache:
+                    json.dump({"version": graphql_validator.PRUNE_VERSION + 1, "introspection": {}}, cache)
+                graphql_validator._introspection()
+                self.assertEqual(introspect.call_count, 3)
+
+    def test_the_next_refresh_is_due_one_ttl_after_the_introspection_it_used(self):
+        # a disk cache another process wrote 50 minutes ago is due again in 10 minutes, not in an hour
+        taken_at = time.time() - 3000
+        self.fetch.side_effect = lambda: (PRUNED_SCHEMA, taken_at)
+        graphql_validator.refresh_schema()
+        due_in = graphql_validator._next_refresh_at - time.monotonic()
+        self.assertAlmostEqual(due_in, graphql_validator.SCHEMA_TTL_SECONDS - 3000, delta=5)
+
+    def test_a_thread_that_cannot_start_does_not_stop_later_refreshes(self):
+        with mock.patch("src.graphql_validator.threading.Thread", side_effect=RuntimeError("can't start new thread")):
+            self.assertIsNone(graphql_validator.live_schema())
+        self.assertFalse(graphql_validator._refreshing)
+        self.assertIsNotNone(graphql_validator.live_schema())
+
+    def test_the_guards_start_the_refresh_and_both_checks_use_one_snapshot(self):
+        self.assertIsNone(guard("{ suppliers(first: 5) { totalCount } }"))
+        self.assertEqual(self.fetch.call_count, 1)
+        with mock.patch("src.graphql_validator._live_facts", return_value=None) as facts:
+            ok, _, error = validate_graphql_query('{ getOldStats(owners: ["pokt1x"]) }', "suppliers")
+        self.assertEqual((ok, error, facts.call_count), (True, None, 1))
 
     def test_schema_is_introspected_once_per_ttl(self):
         for _ in range(3):
@@ -575,7 +618,7 @@ class TestSchemaCheck(unittest.TestCase):
         self.assertEqual((ok, error), (True, None))
         validate_graphql_query("{ suppliers(first: 5) { totalCount } }", "suppliers")
         self.assertEqual(self.fetch.call_count, 1)
-        self.fetch.side_effect, self.fetch.return_value = None, SCHEMA
+        self.fetch.side_effect = fetched
         with mock.patch("src.graphql_validator.time.monotonic", return_value=time.monotonic() + 61):
             ok, _, error = validate_graphql_query('{ getOldStats(owners: ["pokt1x"]) }', "suppliers")
         self.assertFalse(ok)
@@ -594,7 +637,7 @@ class TestSchemaCheck(unittest.TestCase):
 
         def slow_fetch():
             release.wait(5)
-            return SCHEMA
+            return fetched()
 
         def real_thread(**kwargs):
             threads.append(REAL_THREAD(**kwargs))

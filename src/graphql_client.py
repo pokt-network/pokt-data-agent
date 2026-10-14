@@ -361,7 +361,7 @@ ROW_NOTES = {
 # getServiceSummaryList, getMorseClaimSummaryList): their rows are selected like a list's fields, and paged with first /
 # offset in the function's own order (each call computes its answer whole; they have no before... keys).
 NOW_NOTES = {
-    "result": "Rows with camelCase fields to select, e.g. { stakeUpokt supplierCount }; amounts in upokt. At most 1000 rows a call, in the function's own order: for more, call again with first: 1000 and offset: 1000, 2000, ... until a call returns fewer than 1000 rows, and never report a call of 1000 rows as the whole answer. For one total, bySupplier / byApplication false.",
+    "result": "Rows with camelCase fields to select, e.g. { stakeUpokt supplierCount }; amounts in upokt. At most 1000 rows a call, in the function's own order: for more, call again with first: 1000 and offset: 1000, 2000, ... until a call returns fewer than 1000 rows, and never report a call of 1000 rows as the whole answer.",
 }
 
 # Registry of available GraphQL query fields with descriptions
@@ -481,10 +481,8 @@ GRAPHQL_REGISTRY = {
             "# Supplier list, first page, with owner/operator and stake\n"
             "query { suppliers(first: 100, orderBy: ID_ASC) { totalCount pageInfo { hasNextPage endCursor } "
             "nodes { id ownerId operatorId stakeAmount stakeStatus } } }",
-            "# Next page of a walk over all suppliers: after = the previous page's endCursor, and on every page the same "
-            "blockHeight, the _metadata lastProcessedHeight read once before the first page (stop when hasNextPage is "
-            "false; the rows must add up to totalCount)\n"
-            'query { suppliers(first: 100, orderBy: ID_ASC, blockHeight: "964638", after: "<endCursor>") { totalCount '
+            "# Next page: after = the previous page's endCursor, the same orderBy\n"
+            'query { suppliers(first: 100, orderBy: ID_ASC, after: "<endCursor>") { totalCount '
             "pageInfo { hasNextPage endCursor } nodes { id ownerId operatorId stakeAmount stakeStatus } } }",
         ],
     ),
@@ -819,6 +817,7 @@ GRAPHQL_REGISTRY = {
         description="Suppliers now, one list at a time: the suppliers given, the suppliers of some owners, the suppliers that share revenue with some operators (rev_share addresses), or those with an endpoint on some domains; or every supplier when none is given. Kept to stakeStatuses (Staked, Unstaking, Unstaked) and services when given. bySupplier true (default) = one row per supplier (owner, status, stake, number of services); false = one row for the whole group: supplierCount and the summed stakeUpokt. Use it for counts and total stake of suppliers.",
         fields_notes={
             "suppliers/owners/operators/domains": 'Up to 200 addresses or domains in one of these lists; give at most one. owners = the suppliers they own now; operators = the Staked suppliers whose service configs share revenue with those addresses now; operatorScope: "ever" = every supplier that ever shared revenue with them, in any stake status (narrow it with stakeStatuses).',
+            "total": "bySupplier: false = one row for the whole group (supplierCount, stakeUpokt) instead of one per supplier.",
             **NOW_NOTES,
         },
         examples=[
@@ -834,7 +833,10 @@ GRAPHQL_REGISTRY = {
     "getApplicationFleetList": QueryFieldInfo(
         name="getApplicationFleetList",
         description="Applications now: the applications given (up to 200), kept to those staked for some services and to those delegating to some gateways, and to stakeStatuses; none given = every application. byApplication true (default) = one row per application (status, stake, number of services and gateways); false = one row for all: applicationCount and the summed stakeUpokt. Use it for counts and total stake of applications.",
-        fields_notes=NOW_NOTES,
+        fields_notes={
+            "total": "byApplication: false = one row for all (applicationCount, stakeUpokt) instead of one per application.",
+            **NOW_NOTES,
+        },
         examples=[
             "# Staked applications: count and total stake\n"
             'query { getApplicationFleetList(stakeStatuses: ["Staked"], byApplication: false) '
