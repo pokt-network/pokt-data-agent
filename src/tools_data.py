@@ -194,7 +194,7 @@ Guards, checked before the query is sent:
 - What the API no longer serves is refused, with what to use instead: the event and message tables
   (eventClaimSettleds, msgStake..., ...), relations from one entity to another (select the id column, e.g. blockId,
   and query the other entity on its own), filters through a relation, aggregates and groupedAggregates (use totalCount
-  or a function that sums: getSupplierFleetList, getApplicationFleetList, getServiceSummaryList, getBlockStatsJson,
+  or a function that sums: getSupplierFleetList, getApplicationFleetList, getGatewayFleetList, getServiceSummaryList, getBlockStatsJson,
   getMorseClaimSummaryList, the settlement catalog), node, nodeId and ...ByNodeId (look entities up by key).
 - The query is checked against the live API schema: unknown fields, arguments or types, and fields marked deprecated
   (about to leave the API; the message names the replacement), are refused.

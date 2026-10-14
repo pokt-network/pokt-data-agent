@@ -450,7 +450,7 @@ GRAPHQL_REGISTRY = {
             "# Top accounts by upokt balance (rich list), with last-activity block\n"
             'query { balances(first: 20, orderBy: AMOUNT_DESC, filter: {denom: {equalTo: "upokt"}}) '
             "{ totalCount nodes { accountId amount denom lastUpdatedBlockId } } }",
-            "# Count accounts active (balance updated) since a block height (a date's first height: blocks with a timestamp filter, orderBy ID_ASC, first 1)\n"
+            "# Count accounts active (balance updated) since a block height (a date's height: getHeightAt)\n"
             'query { balances(filter: {lastUpdatedBlockId: {greaterThanOrEqualTo: "950000"}, '
             'denom: {equalTo: "upokt"}}) { totalCount } }',
         ],
@@ -530,11 +530,12 @@ GRAPHQL_REGISTRY = {
             "computeUnitsPerRelay": "Numeber of Compute Units to be consumed per call to this service (known normaly by CUPR)",
             "ownerId": "Address of the account that owns this service (the one that can cahnge the CUPR value and receives owner rewards).",
             "suppliers/applications": "How many suppliers and applications a service has: getServiceSummaryList. Which ones: supplierServiceConfigs or applicationServices filtered by serviceId.",
-            "difficulty": "The relay mining difficulty of a service and its history: getRelayMiningDifficultyJson.",
+            "difficulty": "The current relay mining difficulty of a service: getServiceSummaryList (it lists only the services with a supplier or an application now; for another, the newest row of getRelayMiningDifficultyJson); its history: getRelayMiningDifficultyJson.",
         },
         examples=[
-            "# Service list (counts per service: getServiceSummaryList; difficulty: getRelayMiningDifficultyJson)\n"
-            "query { services(first: 20) { totalCount nodes { id name computeUnitsPerRelay ownerId } } }",
+            "# Service list, with the suppliers, applications and current difficulty of every service in the same request\n"
+            "query { services(first: 20, orderBy: ID_ASC) { totalCount nodes { id name computeUnitsPerRelay ownerId } } "
+            "getServiceSummaryList { serviceId suppliers stakedSuppliers applications numRelaysEma difficultyUpdatedHeight } }",
             "# Fuzzy search services by id or name\n"
             'query { services(filter: {or: [{id: {includesInsensitive: "eth"}}, '
             '{name: {includesInsensitive: "eth"}}]}, first: 20) { nodes { id name } } }',
@@ -743,21 +744,16 @@ GRAPHQL_REGISTRY = {
     ),
     "gateways": QueryFieldInfo(
         name="gateways",
-        description="Provides visibility on the network gateways: stake amount and status, unstaking begin/end blocks and the applications delegated to them. Supports totalCount, e.g. filter {stakeStatus: {equalTo: Staked}}; the total stake of the staked gateways is the newest blocks row's stakedGatewaysTokens.",
+        description="Provides visibility on the network gateways: stake amount and status, unstaking begin/end blocks and the applications delegated to them. Supports totalCount, e.g. filter {stakeStatus: {equalTo: Staked}}; for their total stake and their delegated applications use getGatewayFleetList.",
         fields_notes={
             "id": 'The address of the gateway (must start with "pokt1").',
             "stakeStatus": "One of: Staked, Unstaking, Unstaked.",
-            "applications": "Applications delegated to a gateway: applicationGateways filtered by gatewayId.",
+            "applications": "How many applications delegate to each gateway: getGatewayFleetList; which ones: applicationGateways filtered by gatewayId, or getGatewayDelegationsList.",
         },
         examples=[
             "# Staked gateways with their stake\n"
             "query { gateways(first: 20, filter: {stakeStatus: {equalTo: Staked}}) { totalCount "
             "nodes { id stakeAmount } } }",
-            "# Count and total stake of the staked gateways (snapshot of the newest block)\n"
-            "query { blocks(orderBy: ID_DESC, first: 1) { nodes { height: id stakedGateways stakedGatewaysTokens } } }",
-            "# Applications delegated to each of some gateways (one count per gateway)\n"
-            'query { g1: applicationGateways(filter: {gatewayId: {equalTo: "pokt1..."}}) { totalCount } '
-            'g2: applicationGateways(filter: {gatewayId: {equalTo: "pokt1..."}}) { totalCount } }',
         ],
     ),
     "validators": QueryFieldInfo(
@@ -872,8 +868,9 @@ GRAPHQL_REGISTRY = {
             "# Gateways an application has delegated to\n"
             'query { applicationGateways(filter: {applicationId: {equalTo: "pokt1..."}}, first: 100) '
             "{ nodes { gatewayId } } }",
-            "# Those gateways with their stake\n"
-            'query { gateways(filter: {id: {in: ["pokt1...", "pokt1..."]}}, first: 100) { nodes { id stakeAmount stakeDenom } } }',
+            "# The gateways of an application with their stake, in one request (every gateway's stake from getGatewayFleetList)\n"
+            'query { applicationGateways(filter: {applicationId: {equalTo: "pokt1..."}}, first: 100) { nodes { gatewayId } } '
+            "getGatewayFleetList { gatewayId stakeStatus stakeUpokt } }",
         ],
     ),
     "applicationServices": QueryFieldInfo(
@@ -892,7 +889,7 @@ GRAPHQL_REGISTRY = {
         name="getSupplierFleetList",
         description="Suppliers now, one list at a time: the suppliers given, the suppliers of some owners, the suppliers that share revenue with some operators (rev_share addresses), or those with an endpoint on some domains; or every supplier when none is given. Kept to stakeStatuses (Staked, Unstaking, Unstaked) and services when given. bySupplier true (default) = one row per supplier (owner, status, stake, number of services); false = one row for the whole group: supplierCount and the summed stakeUpokt. Use it for counts and total stake of suppliers.",
         fields_notes={
-            "suppliers/owners/operators/domains": 'Up to 200 addresses or domains in one of these lists; give at most one. owners = the suppliers they own now; operators = the Staked suppliers whose service configs share revenue with those addresses now; operatorScope: "ever" = every supplier that ever shared revenue with them, in any stake status (narrow it with stakeStatuses).',
+            "suppliers/owners/operators/domains": "Up to 200 addresses or domains in one of these lists; give at most one. owners = the suppliers they own now; operators = the Staked suppliers whose service configs share revenue with those addresses now.",
             "total": "bySupplier: false = one row for the whole group (supplierCount, stakeUpokt) instead of one per supplier.",
             **NOW_NOTES,
         },
@@ -922,6 +919,48 @@ GRAPHQL_REGISTRY = {
             'afterServiceId: "eth") { supplierId serviceId stakeUpokt } }',
         ],
     ),
+    "getGatewayFleetList": QueryFieldInfo(
+        name="getGatewayFleetList",
+        description="Gateways now: the gateways given (up to 200; omitted = every gateway), kept to stakeStatuses. byGateway true (default) = one row per gateway: stake status, stake, the applications delegating to it now (delegatedApplications), and the delegate and undelegate messages it ever received (delegationsEver, undelegationsEver), largest stake first; false = one row for all (gatewayCount, the summed stakeUpokt). Use it for counts and total stake of gateways and for how many applications delegate to each.",
+        fields_notes={
+            "total": "byGateway: false = one row for all (gatewayCount, stakeUpokt) instead of one per gateway.",
+            **NOW_NOTES,
+        },
+        examples=[
+            "# Staked gateways: count and total stake\n"
+            'query { getGatewayFleetList(stakeStatuses: ["Staked"], byGateway: false) { gatewayCount stakeUpokt } }',
+            "# Staked gateways with their stake and the applications delegating to each\n"
+            'query { getGatewayFleetList(stakeStatuses: ["Staked"]) { gatewayId stakeUpokt delegatedApplications } }',
+        ],
+    ),
+    "getGatewayDelegationsList": QueryFieldInfo(
+        name="getGatewayDelegationsList",
+        description="Some gateways (up to 200) and the applications delegating to them at a height (atHeight omitted = now): each gateway's stake and status, and each delegated application's stake, status and service ids, as of that height. One row per (gateway, application); a gateway with no delegation has one row with null application columns.",
+        fields_notes={
+            "atHeight": "A block height; for a date, getHeightAt(atTime) gives the height.",
+            "rowLimit": "Rows per call, ordered by gatewayId then applicationId. For the next page pass the last row's gatewayId and applicationId as afterGatewayId and afterApplicationId; a page shorter than rowLimit is the last one.",
+            "result": "Rows with camelCase fields to select: gatewayId gatewayStakeUpokt gatewayStakeStatus applicationId stakeUpokt stakeStatus serviceIds; amounts in upokt.",
+        },
+        examples=[
+            "# The applications delegating to a gateway now, with their stake and services\n"
+            'query { getGatewayDelegationsList(gateways: ["pokt1..."]) { gatewayId applicationId stakeUpokt stakeStatus '
+            "serviceIds } }",
+            "# The same at a past height\n"
+            'query { getGatewayDelegationsList(gateways: ["pokt1..."], atHeight: "950000") { applicationId stakeUpokt } }',
+        ],
+    ),
+    "getHeightAt": QueryFieldInfo(
+        name="getHeightAt",
+        description="The last indexed block at or before a time: its height and blockTime (null when no indexed block is that early). beyondTip is true when the time is after the newest indexed block. Use it to turn a date into a height for the lists and functions that take a height.",
+        fields_notes={
+            "atTime": "A time in UTC with an explicit zone, e.g. 2026-10-01T00:00:00Z.",
+            "since a date": "The first block at or after a date is the returned height + 1, unless blockTime equals the date.",
+        },
+        examples=[
+            "# Height of the last block before a date\n"
+            'query { getHeightAt(atTime: "2026-10-13T00:00:00Z") { height blockTime beyondTip } }',
+        ],
+    ),
     "getApplicationFleetList": QueryFieldInfo(
         name="getApplicationFleetList",
         description="Applications now: the applications given (up to 200), kept to those staked for some services and to those delegating to some gateways, and to stakeStatuses; none given = every application. byApplication true (default) = one row per application (status, stake, number of services and gateways); false = one row for all: applicationCount and the summed stakeUpokt. Use it for counts and total stake of applications.",
@@ -939,23 +978,23 @@ GRAPHQL_REGISTRY = {
     ),
     "getServiceSummaryList": QueryFieldInfo(
         name="getServiceSummaryList",
-        description="Services now: per service, the suppliers configured for it (suppliers) and how many of them are Staked (stakedSuppliers), and the applications staked for it (applications) and how many are Staked (stakedApplications). services = those (up to 200); omitted = every service with a supplier or an application.",
+        description="Services now: per service, the suppliers configured for it (suppliers) and how many of them are Staked (stakedSuppliers), the applications staked for it (applications) and how many are Staked (stakedApplications), and its current relay mining difficulty from its newest update (numRelaysEma, targetHashHex, difficultyUpdatedHeight; null when it never had one). services = those (up to 200); omitted = every service with a supplier or an application.",
         fields_notes=NOW_NOTES,
         examples=[
-            "# Suppliers and applications per service\n"
+            "# Suppliers, applications and current difficulty per service\n"
             'query { getServiceSummaryList(services: ["eth", "base"]) { serviceId stakedSuppliers suppliers '
-            "stakedApplications applications } }",
+            "stakedApplications applications numRelaysEma difficultyUpdatedHeight } }",
         ],
     ),
     "getRelayMiningDifficultyJson": QueryFieldInfo(
         name="getRelayMiningDifficultyJson",
-        description="Relay mining difficulty history of some services (up to 200): each update with the relays EMA (exponential moving average of relays per session) and the target hash before and after it. The difficulty affects the ratio of claimed CUs to estimated CUs; a higher EMA means the service has a higher relay throughput. The current difficulty of a service is its newest row (rowLimit 1, that one service).",
+        description="Relay mining difficulty history of some services (up to 200): each update with the relays EMA (exponential moving average of relays per session) and the target hash before and after it. The difficulty affects the ratio of claimed CUs to estimated CUs; a higher EMA means the service has a higher relay throughput. The current difficulty of every service: getServiceSummaryList.",
         fields_notes={
             **ROW_NOTES,
             "before...": "beforeHeight and beforeServiceId: the height and service_id of the last row of the previous page.",
         },
         examples=[
-            '# Current difficulty of a service\nquery { getRelayMiningDifficultyJson(services: ["eth"], rowLimit: 1) }',
+            '# Newest difficulty update of a service\nquery { getRelayMiningDifficultyJson(services: ["eth"], rowLimit: 1) }',
             "# Difficulty updates of some services in a time range\n"
             'query { getRelayMiningDifficultyJson(services: ["eth", "base"], rangeStart: "2026-06-01T00:00:00Z", '
             'rangeEnd: "2026-06-11T00:00:00Z", rowLimit: 1000) }',
@@ -982,7 +1021,7 @@ GRAPHQL_REGISTRY = {
         description="Stake history of suppliers, applications or gateways, one row per event, newest first: stake and unstake messages (with the stake), unbonding begin and end (reason, unbonding end height), for suppliers each slash (service, application, session, penalty, stake before and after it, proof validation status), and for applications and gateways delegations to one another. Use it to track if and when an actor was staked, re-staked, unstaked or slashed.",
         fields_notes={
             "kind": "supplier, application or gateway (required).",
-            "addresses/owners/operators": 'addresses = those actors (up to 200); for suppliers also owners (the suppliers they own now) or operators = the Staked suppliers whose service configs share revenue with those addresses now; operatorScope: "ever" = every supplier that ever shared revenue with them, in any stake status, with all its events. Give one list.',
+            "addresses/owners/operators": "addresses = those actors (up to 200); for suppliers also owners (the suppliers they own now) or operators = the Staked suppliers whose service configs share revenue with those addresses now, with all its events. Give one list.",
             "events": "Omit for all, or a list of: stake, unstake, unbonding_begin, unbonding_end, slash (suppliers), delegate, undelegate (applications and gateways).",
             **ROW_NOTES,
             "before...": "beforeHeight and beforeId: the height and id of the last row of the previous page.",
@@ -998,11 +1037,36 @@ GRAPHQL_REGISTRY = {
             'beforeHeight: "964073", beforeId: "964073-finalize_block-17563") }',
         ],
     ),
+    "getCreatedClaimsJson": QueryFieldInfo(
+        name="getCreatedClaimsJson",
+        description="Claims created (MsgCreateClaim) by up to 20 suppliers, newest first, whether or not they settled yet: application, service, session, session end height, relays, compute units and claimed upokt as claimed, and the transaction. fromSessionEndHeight keeps the claims of sessions that end at or after that height. For settled and expired claims use getClaimsJson.",
+        fields_notes={
+            **ROW_NOTES,
+            "before...": "beforeHeight and beforeId: the height and id of the last row of the previous page.",
+        },
+        examples=[
+            "# Claims a supplier created for sessions ending at or after a height\n"
+            'query { getCreatedClaimsJson(suppliers: ["pokt1..."], fromSessionEndHeight: "964000", rowLimit: 100) }',
+        ],
+    ),
+    "getCreatedClaimsCountList": QueryFieldInfo(
+        name="getCreatedClaimsCountList",
+        description="Claims created (MsgCreateClaim) counted per supplier, for up to 20 suppliers, in an optional time range: one row per supplier with claims (0 when none) and the first and last height counted. fromSessionEndHeight counts only the claims of sessions that end at or after that height.",
+        fields_notes={
+            "rangeStart/rangeEnd": "Optional range [start, end) in UTC with an explicit zone; omit both for the whole history.",
+            "result": "Rows with camelCase fields to select: supplierId claims firstHeight lastHeight.",
+        },
+        examples=[
+            "# How many claims some suppliers created for sessions ending at or after a height\n"
+            'query { getCreatedClaimsCountList(suppliers: ["pokt1..."], fromSessionEndHeight: "964000") '
+            "{ supplierId claims firstHeight lastHeight } }",
+        ],
+    ),
     "getClaimsJson": QueryFieldInfo(
         name="getClaimsJson",
         description="Claims one by one, newest first: settled ones with relays, estimated relays, claimed and estimated compute units, claimed and settled upokt, minted and overservicing amounts and whether a proof backed them; expired ones (no valid proof in time, a penalty for the supplier) with their expiration_reason. statuses = settled, expired (omitted = both). Filters, combined: suppliers (up to 200), owners or operators; applications and services (up to 200 each). For totals use getSupplierEarningsJson, getApplicationSpendJson, getServiceUsageJson or getSupplierPenaltiesJson.",
         fields_notes={
-            "suppliers/owners/operators": 'suppliers = those (up to 200); owners = the suppliers they own now; operators = the Staked suppliers whose service configs share revenue with those addresses now; operatorScope: "ever" = every supplier that ever shared revenue with them, in any stake status, with all its claims. Give at most one.',
+            "suppliers/owners/operators": "suppliers = those (up to 200); owners = the suppliers they own now; operators = the Staked suppliers whose service configs share revenue with those addresses now, with all its claims. Give at most one.",
             **ROW_NOTES,
             "before...": "beforeHeight and beforeEventIdx: the height and event_idx of the last row of the previous page.",
             "coverage": COVERAGE_NOTE,
@@ -1091,6 +1155,7 @@ GRAPHQL_REGISTRY = {
             **CATALOG_NOTES,
             "suppliers": "Supplier (operator) addresses, up to 200; omit both suppliers and owners for every supplier (then use bySupplier: false).",
             "owners": "Owner addresses in place of suppliers: the suppliers they own now.",
+            "services": "Up to 200 services: only the claims of those services.",
             "byService/byApplication/bySupplier": "Split by service, by application, or per supplier (bySupplier defaults to true when suppliers are given).",
             "claimed_upokt": "upokt the suppliers claimed; settled_upokt is what was paid after overservicing.",
         },
@@ -1101,6 +1166,9 @@ GRAPHQL_REGISTRY = {
             "# All suppliers of an owner, per day\n"
             'query { getSupplierEarningsJson(owners: ["pokt1..."], rangeStart: "2026-09-28T00:00:00Z", '
             'rangeEnd: "2026-10-05T00:00:00Z", bucket: "day", bySupplier: false) }',
+            "# What every supplier earned on one service in a day\n"
+            'query { getSupplierEarningsJson(services: ["eth"], rangeStart: "2026-10-04T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z", bySupplier: false) }',
         ],
     ),
     "getSupplierProofsJson": QueryFieldInfo(

@@ -782,6 +782,8 @@ class SettlementRewardsAgent(QueryBuilderSubAgent):
         "getApplicationSpendJson",
         "getGatewaySpendJson",
         "moneyCoverageJson",
+        "getCreatedClaimsJson",
+        "getCreatedClaimsCountList",
     ]
     rpc_methods = [
         "get_claim",
@@ -861,7 +863,7 @@ Always apply a filter when possible, such as service ID, domain list, or date ra
 If the user asks which services are most active, most profitable, or have the most supplier support, use grouped and time-truncated service analytics; getServiceUsageJson with topBySettled ranks services by settled value.
 If the user asks to compare service performance between two periods (growth/decline), prefer servicesPerformanceBetweenTimes, which compares a current and a previous window in one call.
 If the user asks about relay-mining difficulty, interpret it as the mechanism that affects the relationship between claimed computed units and estimated computed units.
-If the user asks how many suppliers or applications a service has, use getServiceSummaryList; for the suppliers (count, stake) on some domains, getSupplierFleetList with domains.
+If the user asks how many suppliers or applications a service has, or its current difficulty, use getServiceSummaryList; for the suppliers (count, stake) on some domains, getSupplierFleetList with domains.
 If the user provides a service identifier or service name, filter by that service whenever possible.
 If the user asks for does not clarify it, supose that i
 
@@ -938,6 +940,8 @@ class StakingParticipantStateAgent(QueryBuilderSubAgent):
         "getSupplierFleetList",
         "getStakedSupplierServicesList",
         "getApplicationFleetList",
+        "getGatewayFleetList",
+        "getGatewayDelegationsList",
         "getActorLifecycleJson",
         "getDataByDelegatorAddressesAndTimes",
         "getDataByDelegatorAddressesAndBlocks",
@@ -970,7 +974,7 @@ Your queries should prefer the most specific get... GraphQL methods for particip
 Always apply a filter when possible, such as address, address list, time range, block range, or service context, because participant-state data is large and entity-specific.
 
 If the user asks about application health, gateway status, or supplier lifecycle, combine the stake history (getActorLifecycleJson) with overservicing (getOverservicedByAddressesAndTime).
-If the user asks for counts or total stake of applications or suppliers, use getApplicationFleetList or getSupplierFleetList (byApplication / bySupplier false for one total); for gateways and validators, the newest blocks row (stakedGateways, stakedGatewaysTokens, stakedValidators, stakedValidatorsTokens); a count alone is the totalCount of the entity table with a stakeStatus filter. Do not accumulate events.
+If the user asks for counts or total stake of applications or suppliers, use getApplicationFleetList, getSupplierFleetList or getGatewayFleetList (byApplication / bySupplier / byGateway false for one total); for validators, the newest blocks row (stakedValidators, stakedValidatorsTokens); a count alone is the totalCount of the entity table with a stakeStatus filter. Do not accumulate events.
 If the user asks which suppliers serve a service (or which services a supplier is staked in), use supplierServiceConfigs filtered by serviceId or supplierId.
 If the user asks about delegators of a supplier node, treat them as the supplier's rev_share addresses: the addresses configured in the supplier rev_share that receive a share of its reward tokens (for a given service configured). Use the delegator-oriented summaries for them, and do not confuse them with validator (consensus) delegators.
 If the user asks about delegators of a validator (consensus delegations), use the RPC methods: get_validator_delegations for who delegates to a validator, and get_delegator_delegations for which validators an account delegates to.
@@ -997,6 +1001,7 @@ class AccountStateAgent(QueryBuilderSubAgent):
         "nativeTransfers",
         "morseClaimableAccounts",
         "getMorseClaimSummaryList",
+        "getHeightAt",
     ]
     rpc_methods = [
         "get_account_balance",
@@ -1037,6 +1042,7 @@ class ChainActivityAgent(QueryBuilderSubAgent):
         "getBlockStatsJson",
         "accounts",
         "balances",
+        "getHeightAt",
         "validators",
         "getProducedBlocksByValidator",
         "getMissingValidatorBlocks",

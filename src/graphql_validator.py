@@ -109,7 +109,7 @@ HIDDEN_FIELDS = {
     "msgStakeApplications": 'getActorLifecycleJson with kind: "application"; current stake in applications',
     "msgStakeGateways": 'getActorLifecycleJson with kind: "gateway"; current stake in gateways',
     "msgStakeSupplierServices": "supplierServiceConfigs",
-    "eventRelayMiningDifficultyUpdateds": "getRelayMiningDifficultyJson (the current value is its newest row, rowLimit: 1)",
+    "eventRelayMiningDifficultyUpdateds": "getRelayMiningDifficultyJson (the history); the current value: getServiceSummaryList",
     "eventApplicationOverserviceds": "getApplicationSpendJson or getOverservicedByAddressesAndTime",
     "eventGatewayUnbondingBegins": 'getActorLifecycleJson with kind: "gateway"',
     "eventGatewayUnbondingEnds": 'getActorLifecycleJson with kind: "gateway"',
@@ -136,7 +136,7 @@ FILTER_HINT = (
     "its own and filter by its id column (supplierId, applicationId, blockId)."
 )
 AGGREGATE_HINT = (
-    "use totalCount for a count, a function that sums the rows (getSupplierFleetList, getApplicationFleetList, "
+    "use totalCount for a count, a function that sums the rows (getSupplierFleetList, getApplicationFleetList, getGatewayFleetList, "
     "getServiceSummaryList, getBlockStatsJson, getMorseClaimSummaryList or the settlement catalog ...Json), or the "
     "newest blocks row's staked* and unstaking* columns"
 )
