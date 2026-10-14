@@ -17,6 +17,7 @@ from src.graphql_client import (
     PocketNetworkAPIClient,
     final_error_reply,
     is_fixable_query_error,
+    page_notes,
     range_notes,
 )
 from src.graphql_validator import validate_graphql_query
@@ -389,7 +390,7 @@ For GraphQL: use one of the given fields with appropriate filters; for sums, ave
 Keep queries simple. Check for pagination. Pass numerical fields in quotes.
 Every connection that selects "nodes" or "edges" needs a "first" between 1 and 1000; for counts use totalCount, for sums the function that sums (no aggregates).
 Do not nest one entity inside another (no relations) nor filter through one: select the id column (e.g. blockId, supplierId) and query the other entity as its own root field, filtered by that id.
-The query returns one page: never page by offset. Give an entity list a fixed orderBy (ID_ASC when nothing else is asked) and select pageInfo {{ hasNextPage endCursor }}. When hasNextPage is true, or a function returns as many rows as rowLimit or first, say that the answer covers that page only: never present it as the whole list.
+Never page by offset. Give an entity list a fixed orderBy (ID_ASC when nothing else is asked) and select pageInfo {{ hasNextPage endCursor }}; a next page passes after: <endCursor>, and a walk over several pages pins the same blockHeight on every page (the _metadata lastProcessedHeight read once), as the examples show. Row functions page with their before... / after... keys. A result that is one page of a longer list is a part of it, never the whole list.
 Settlement catalog functions (get...Json, legacy..., moneyCoverageJson) take a [start, end) range in UTC with "Z". Their bucket allows hour up to 7 days, day up to 92 days, week up to 366 days. Their answer says the part of the range it covers ("range"): a part before or after it, or in a gap, is not covered yet, never 0, and a 0 or a missing row there is not covered yet either: do not answer it with another function.
 
 {output_instructions}
@@ -637,6 +638,10 @@ Return ONLY the JSON object, no extra text or markdown."""
             used_method_description += GRAPHQL_REGISTRY.get(endpoint_method).description
         notes = range_notes(final_state.get("query_result")) if endpoint_type == "graphql" else []
         coverage = "".join(f"\nCoverage: {note}" for note in notes)
+        if endpoint_type == "graphql":
+            coverage += "".join(
+                f"\nPage: {note}" for note in page_notes(final_state["query"], final_state.get("query_result"))
+            )
         return SubAgentResult(
             query=final_state["query"],
             explanation=f"Used method description: {used_method_description}{coverage}",
@@ -829,6 +834,7 @@ class ServiceEconomicsAgent(QueryBuilderSubAgent):
         "getAmountOfBlocksAndSuppliersByTimes",
         "getRelayMiningDifficultyJson",
         "getServiceSummaryList",
+        "getStakedSupplierServicesList",
         "getRewardsByDomainsAndTimeGroupByService",
         "getSupplierFleetList",
         "getSupplierEarningsJson",
@@ -930,6 +936,7 @@ class StakingParticipantStateAgent(QueryBuilderSubAgent):
         "applicationGateways",
         "applicationServices",
         "getSupplierFleetList",
+        "getStakedSupplierServicesList",
         "getApplicationFleetList",
         "getActorLifecycleJson",
         "getDataByDelegatorAddressesAndTimes",

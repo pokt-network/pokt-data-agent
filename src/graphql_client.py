@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, List, Tuple
 
 import requests
+from graphql import FieldNode, GraphQLError, IntValueNode, OperationDefinitionNode, parse
 
 from src.models import QueryFieldInfo
 
@@ -315,6 +316,78 @@ def range_notes(result: Any) -> List[str]:
     return [note for name, data, range_ in _ranged_fields(result) for note in _field_notes(name, data, range_)]
 
 
+# Functions that list rows one by one, newest first, at most rowLimit a call (DEFAULT_ROW_LIMIT when omitted), paged
+# with before...: pocketdex CATALOG_FUNCTIONS minus the money catalog (graphql_validator.CATALOG_FUNCTIONS).
+ROW_FUNCTIONS = frozenset(
+    {
+        "getClaims",
+        "getActorLifecycle",
+        "getRelayMiningDifficulty",
+        "getCreatedClaims",
+        "getMorseClaims",
+    }
+)
+DEFAULT_ROW_LIMIT = 100
+# The most rows one call of a function list returns without "first" or "rowLimit": the API's query limit (both
+# endpoints, 2026-10-14). A call that returns that many may have more.
+MAX_LIST_ROWS = 1000
+
+
+def _int_argument(field: FieldNode, name: str) -> int | None:
+    value = next((arg.value for arg in field.arguments if arg.name.value == name), None)
+    return int(value.value) if isinstance(value, IntValueNode) else None
+
+
+def _page_note(field: FieldNode, key: str, value: Any) -> str | None:
+    """Why the rows of one root field are a page of a longer list, or None."""
+    name = field.name.value
+    first, row_limit = _int_argument(field, "first"), _int_argument(field, "rowLimit")
+    if isinstance(value, dict) and isinstance(value.get("nodes", value.get("edges")), list):
+        rows = len(value.get("nodes", value.get("edges")))
+        more = (value.get("pageInfo") or {}).get("hasNextPage")
+        total = value.get("totalCount")
+        if more or (isinstance(total, int) and total > rows) or (more is None and first is not None and rows >= first):
+            of = f" of {total}" if isinstance(total, int) else ""
+            return f"{key} returned {rows} rows{of}: one page of a longer list (the next page: after its endCursor)."
+        return None
+    if isinstance(value, list):
+        limits = [n for n in (first, row_limit) if n is not None]
+        limit = min(limits) if limits else MAX_LIST_ROWS
+        if len(value) >= limit:
+            return f"{key} returned {len(value)} rows, the most this call returns: there may be more."
+        return None
+    if name.endswith("Json") and name[: -len("Json")] in ROW_FUNCTIONS:
+        data, _ = unwrap_range(value)
+        limit = row_limit or DEFAULT_ROW_LIMIT
+        if isinstance(data, list) and len(data) >= limit:
+            return (
+                f"{key} returned {len(data)} rows, its rowLimit: there may be more (the next page: the before... "
+                "arguments with the last row's keys)."
+            )
+    return None
+
+
+def page_notes(query: str, result: Any) -> List[str]:
+    """What the answer must say about a list that came back as one page of a longer one: never all of it."""
+    try:
+        document = parse(query)
+    except (GraphQLError, RecursionError):
+        return []
+    if not isinstance(result, dict):
+        return []
+    notes = []
+    for definition in document.definitions:
+        if not isinstance(definition, OperationDefinitionNode):
+            continue
+        for field in definition.selection_set.selections:
+            if isinstance(field, FieldNode):
+                key = field.alias.value if field.alias else field.name.value
+                note = _page_note(field, key, result.get(key))
+                if note:
+                    notes.append(note + " Say the answer is a part of the list, never all of it.")
+    return notes
+
+
 def not_covered_error(result: Any) -> str | None:
     """The coverage error for a result whose every field is in the {range, data} shape and covers nothing, else None.
 
@@ -358,10 +431,11 @@ ROW_NOTES = {
     "result": '{"range": {...}, "data": [rows]}: the rows in "data" with snake_case keys, numbers as strings (amounts in upokt), and the part of the range the data covers in "range". No rows, or a missing row, in a part of the range outside covered_from / covered_to or in a gap is not covered yet, never none or 0.',
 }
 # Rules shared by the functions that answer the current state (getSupplierFleetList, getApplicationFleetList,
-# getServiceSummaryList, getMorseClaimSummaryList): their rows are selected like a list's fields, and paged with first /
-# offset in the function's own order (each call computes its answer whole; they have no before... keys).
+# getServiceSummaryList, getMorseClaimSummaryList): their rows are selected like a list's fields. They have no keyset and
+# no blockHeight, so they are not walked page by page (an offset walk over a list ordered by stake skips or repeats rows
+# whose stake changes between calls).
 NOW_NOTES = {
-    "result": "Rows with camelCase fields to select, e.g. { stakeUpokt supplierCount }; amounts in upokt. At most 1000 rows a call, in the function's own order: for more, call again with first: 1000 and offset: 1000, 2000, ... until a call returns fewer than 1000 rows, and never report a call of 1000 rows as the whole answer.",
+    "result": "Rows with camelCase fields to select, e.g. { stakeUpokt supplierCount }; amounts in upokt. One call returns a limited number of rows: an answer that may be cut is a part of the list, never all of it. Do not page these functions by offset; for every row of a long list, use the entity list (suppliers, applications) paged by keyset with one pinned blockHeight.",
 }
 
 # Registry of available GraphQL query fields with descriptions
@@ -481,8 +555,10 @@ GRAPHQL_REGISTRY = {
             "# Supplier list, first page, with owner/operator and stake\n"
             "query { suppliers(first: 100, orderBy: ID_ASC) { totalCount pageInfo { hasNextPage endCursor } "
             "nodes { id ownerId operatorId stakeAmount stakeStatus } } }",
-            "# Next page: after = the previous page's endCursor, the same orderBy\n"
-            'query { suppliers(first: 100, orderBy: ID_ASC, after: "<endCursor>") { totalCount '
+            "# Next page of a walk over several pages: after = the previous page's endCursor, the same orderBy, and on "
+            "every page the same blockHeight (the _metadata lastProcessedHeight read once before the first page); stop "
+            "when hasNextPage is false, and the rows must add up to totalCount\n"
+            'query { suppliers(first: 100, orderBy: ID_ASC, blockHeight: "964638", after: "<endCursor>") { totalCount '
             "pageInfo { hasNextPage endCursor } nodes { id ownerId operatorId stakeAmount stakeStatus } } }",
         ],
     ),
@@ -828,6 +904,22 @@ GRAPHQL_REGISTRY = {
             "{ supplierCount stakeUpokt } }",
             "# The suppliers of an owner, largest stake first\n"
             'query { getSupplierFleetList(owners: ["pokt1..."]) { supplierId stakeStatus stakeUpokt serviceCount } }',
+        ],
+    ),
+    "getStakedSupplierServicesList": QueryFieldInfo(
+        name="getStakedSupplierServicesList",
+        description="The service configs of the Staked suppliers now, one row per (supplier, service): the supplier's owner and stake, the service, the endpoint root domains of that config and the height from which the chain serves it. services keeps those services (up to 200; omitted = all). Use it for the services of the staked suppliers, or the staked suppliers of some services with their stake and domains. Only Staked suppliers; for one supplier in any status use supplierServiceConfigs filtered by supplierId.",
+        fields_notes={
+            "rowLimit": "Rows per call, ordered by supplierId then serviceId: default and most 1000. For the next page pass the last row's supplierId and serviceId as afterSupplierId and afterServiceId; a page shorter than rowLimit is the last one.",
+            "result": "Rows with camelCase fields to select: supplierId serviceId ownerId stakeUpokt domains activatedAtHeight; amounts in upokt.",
+        },
+        examples=[
+            "# Staked suppliers of a service with their stake and endpoint domains\n"
+            'query { getStakedSupplierServicesList(services: ["eth"], rowLimit: 1000) { supplierId ownerId stakeUpokt '
+            "domains activatedAtHeight } }",
+            "# Next page: the last row's supplierId and serviceId\n"
+            'query { getStakedSupplierServicesList(services: ["eth"], rowLimit: 1000, afterSupplierId: "pokt1...", '
+            'afterServiceId: "eth") { supplierId serviceId stakeUpokt } }',
         ],
     ),
     "getApplicationFleetList": QueryFieldInfo(

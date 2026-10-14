@@ -17,7 +17,6 @@ from src.graphql_validator import (
     MAX_FIRST,
     MAX_VISITED_FIELDS,
     ROW_FUNCTIONS,
-    check_query_guards,
     validate_graphql_query,
 )
 from src.tools_data import MAX_RESULT_CHARS, execute_graphql
@@ -49,7 +48,7 @@ POCKETDEX_CATALOG_FUNCTIONS = [
 
 
 def guard(query):
-    return check_query_guards(parse(query))
+    return graphql_validator._guards(parse(query), graphql_validator._live_facts())
 
 
 class TestQueryGuards(unittest.TestCase):
@@ -347,6 +346,11 @@ SCHEMA = build_schema(
       nodeId: ID!
       suppliers(first: Int, after: String, orderBy: [SuppliersOrderBy!], filter: SupplierFilter): SuppliersConnection
       supplier(id: String!): Supplier
+      query: Query!
+      node(nodeId: ID!): Node
+      supplierByNodeId(nodeId: ID!): Supplier
+      eventClaimSettled(id: String!): Supplier
+      msgStakeSupplier(id: String!): Supplier
       getSupplierFleetJson(owners: [String]): JSON
       getOldStats(owners: [String]): JSON @deprecated(reason: "Use getSupplierFleetJson.")
       eventClaimSettleds(first: Int): SuppliersConnection @deprecated(reason: "Use getClaimsList, live reason.")
@@ -409,6 +413,8 @@ def fetched():
 
 
 REAL_THREAD = threading.Thread
+# A moment past any refresh deadline: the TTL plus the largest random delay.
+LATER = graphql_validator.SCHEMA_TTL_SECONDS + graphql_validator.SCHEMA_REFRESH_JITTER_SECONDS + 1
 
 
 class SyncThread:
@@ -589,7 +595,28 @@ class TestSchemaCheck(unittest.TestCase):
         self.fetch.side_effect = lambda: (PRUNED_SCHEMA, taken_at)
         graphql_validator.refresh_schema()
         due_in = graphql_validator._next_refresh_at - time.monotonic()
-        self.assertAlmostEqual(due_in, graphql_validator.SCHEMA_TTL_SECONDS - 3000, delta=5)
+        # plus a random delay of up to SCHEMA_REFRESH_JITTER_SECONDS, so that processes do not all fetch at once
+        self.assertGreaterEqual(due_in, graphql_validator.SCHEMA_TTL_SECONDS - 3000 - 5)
+        self.assertLessEqual(
+            due_in, graphql_validator.SCHEMA_TTL_SECONDS - 3000 + graphql_validator.SCHEMA_REFRESH_JITTER_SECONDS
+        )
+
+    def test_the_query_wrapper_is_checked_as_the_root(self):
+        cases = (
+            ('{ query { eventClaimSettled(id: "x") { id } } }', "is leaving the API"),
+            ('{ query { msgStakeSupplier(id: "x") { id } } }', "is leaving the API"),
+            ('{ query { node(nodeId: "x") { ... on Supplier { id } } } }', "look an entity up by its key"),
+            ('{ query { supplierByNodeId(nodeId: "x") { id } } }', "look an entity up by its key"),
+        )
+        for loaded in (False, True):
+            if loaded:
+                graphql_validator.refresh_schema()
+            for query, message in cases:
+                with self.subTest(query=query, schema_loaded=loaded):
+                    self.assertIn(message, guard(query))
+            # and what is allowed at the root stays allowed under the wrapper
+            with self.subTest(schema_loaded=loaded):
+                self.assertIsNone(guard('{ query { supplier(id: "x") { id ownerId } } }'))
 
     def test_a_thread_that_cannot_start_does_not_stop_later_refreshes(self):
         with mock.patch("src.graphql_validator.threading.Thread", side_effect=RuntimeError("can't start new thread")):
@@ -608,7 +635,7 @@ class TestSchemaCheck(unittest.TestCase):
         for _ in range(3):
             validate_graphql_query("{ suppliers(first: 5) { totalCount } }", "suppliers")
         self.assertEqual(self.fetch.call_count, 1)
-        with mock.patch("src.graphql_validator.time.monotonic", return_value=time.monotonic() + 3601):
+        with mock.patch("src.graphql_validator.time.monotonic", return_value=time.monotonic() + LATER):
             validate_graphql_query("{ suppliers(first: 5) { totalCount } }", "suppliers")
         self.assertEqual(self.fetch.call_count, 2)
 
@@ -627,7 +654,7 @@ class TestSchemaCheck(unittest.TestCase):
     def test_a_failed_refresh_keeps_the_schema_it_had(self):
         validate_graphql_query("{ suppliers(first: 5) { totalCount } }", "suppliers")
         self.fetch.side_effect = OSError("introspection is off")
-        with mock.patch("src.graphql_validator.time.monotonic", return_value=time.monotonic() + 3601):
+        with mock.patch("src.graphql_validator.time.monotonic", return_value=time.monotonic() + LATER):
             ok, _, error = validate_graphql_query('{ getOldStats(owners: ["pokt1x"]) }', "suppliers")
         self.assertFalse(ok)
         self.assertIn("deprecated", error)

@@ -175,6 +175,8 @@ Obtained data:
 - result: {state.get("query_result")}
 - notes: {state.get("agent_notes", "")}
 - endpoint_type: {state.get("endpoint_type", "graphql")}
+
+If the notes hold a "Page:" note, say that the result is a part of the list, not all of it.
 """
         messages = [
             SystemMessage(content=self.get_system_prompt()),

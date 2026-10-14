@@ -12,6 +12,7 @@ from src.graphql_client import (
     GRAPHQL_REGISTRY,
     POCKET_NETWORK_DATA_ENDPOINT,
     PocketNetworkAPIClient,
+    page_notes,
     range_notes,
 )
 from src.graphql_validator import LIVE_REWARD_FIELDS, MAX_FIRST, check_query
@@ -122,7 +123,7 @@ def get_method_data(method_name: str, protocol: str) -> Dict[str, Any]:
 GET_METHOD_EXAMPLES_DESCRIPTION = """Return curated, working example queries for a Pocket Network GraphQL or RPC API method.
 
 The examples are taken from production consumers of the API (such as the Pocket Network explorer) and show
-the exact argument names, filters, orderings and aggregations the method supports. Use them as templates
+the exact argument names, filters and orderings the method supports. Use them as templates
 when building a query or writing code against the API. Each example starts with a "#" comment stating its
 purpose. Placeholders like "pokt1..." must be replaced with real values before executing.
 
@@ -183,12 +184,13 @@ Guards, checked before the query is sent:
   function of the same name, which says the range it covers.
 - Every connection that selects "nodes" or "edges" needs a literal "first" between 1 and {MAX_FIRST}, and is paged by
   keyset, never by offset (an offset above 0 is refused): a fixed orderBy (ID_ASC), pageInfo {{ hasNextPage endCursor }}
-  and after: <endCursor>. To walk a whole list, read _metadata lastProcessedHeight once (data_get_indexer_status) and
-  pass it as blockHeight to every page, so the pages are one consistent read; stop when hasNextPage is false, and check
-  the rows add up to totalCount. Row functions (getClaimsJson, getActorLifecycleJson, ...) page with their before...
-  arguments; the ...List functions without them (getSupplierFleetList, getApplicationFleetList, getServiceSummaryList)
-  with first and offset in their own order, until a call returns fewer rows than first. A full page may not be the last
-  one: never report it as the whole list.
+  and after: <endCursor>. A walk over several pages pins the same blockHeight on every page (the _metadata
+  lastProcessedHeight read once before the first page, data_get_indexer_status), so the pages are one consistent read;
+  stop when hasNextPage is false, and check the rows add up to totalCount. Row functions (getClaimsJson,
+  getActorLifecycleJson, getStakedSupplierServicesList, ...) page with their before... / after... keys. The functions
+  without keys (getSupplierFleetList, getApplicationFleetList, ...) are not paged by offset: use their one-total form,
+  or the entity list. A result that is one page of a longer list comes with a "Page:" note: never report it as the
+  whole list.
 - What the API no longer serves is refused, with what to use instead: the event and message tables
   (eventClaimSettleds, msgStake..., ...), relations from one entity to another (select the id column, e.g. blockId,
   and query the other entity on its own), filters through a relation, aggregates and groupedAggregates (use totalCount
@@ -229,7 +231,13 @@ def execute_graphql(query: str) -> Tuple[bool, Any, str | None]:
 
     success, result, error = PocketNetworkAPIClient().execute_query(query)
     if success:
-        notes = " ".join(f"Coverage: {note}" for note in range_notes(result)) or None
+        notes = (
+            " ".join(
+                [f"Coverage: {note}" for note in range_notes(result)]
+                + [f"Page: {note}" for note in page_notes(query, result)]
+            )
+            or None
+        )
         text = json.dumps(result)
         if len(text) > MAX_RESULT_CHARS:
             return (

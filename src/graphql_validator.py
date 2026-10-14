@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import random
 import re
 import threading
 import time
@@ -47,7 +48,7 @@ from graphql import (
 from graphql.validation import NoDeprecatedCustomRule
 
 from src import tools_introspection
-from src.graphql_client import GRAPHQL_REGISTRY
+from src.graphql_client import GRAPHQL_REGISTRY, ROW_FUNCTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -96,17 +97,8 @@ CATALOG_FUNCTIONS = frozenset(
         "getBlockStats",
     }
 )
-# The rest of pocketdex CATALOG_FUNCTIONS: functions that list rows one by one, newest first, at most rowLimit a call
-# and paged with before...; the ...List variant and the ...Json twin return the same rows, the twin with the range.
-ROW_FUNCTIONS = frozenset(
-    {
-        "getClaims",
-        "getActorLifecycle",
-        "getRelayMiningDifficulty",
-        "getCreatedClaims",
-        "getMorseClaims",
-    }
-)
+# The rest of pocketdex CATALOG_FUNCTIONS is ROW_FUNCTIONS (graphql_client): their ...List variant and their ...Json
+# twin return the same rows, the twin with the range.
 # The lists and functions the closed pocketdex schema drops (docs/graphql-migration.md), with what replaces them. The
 # event and message tables not named here are hidden too (EVENT_PREFIXES). The live schema's deprecation reason, when
 # there is one, is said instead: these are the fallback while the API cannot be introspected.
@@ -379,7 +371,10 @@ def _check_field(
                 '(orderBy: ID_ASC, pageInfo { hasNextPage endCursor }, after: "<endCursor>"), never by offset.'
             )
 
-    if level == "root" and name.startswith("_"):
+    if level == "root" and name == "query":
+        # PostGraphile's Query.query re-enters the root: its fields are root fields
+        child_level = "root"
+    elif level == "root" and name.startswith("_"):
         child_level = "free"
     elif level == "root":
         is_list = any(child.name.value in CONNECTION_FIELDS + AGGREGATE_FIELDS for child, _ in children)
@@ -399,18 +394,13 @@ def _check_field(
 
 def check_query(document: DocumentNode) -> Optional[str]:
     """Why an LLM-generated query must not be sent, or None when it may be: the guards, then the API schema, both
-    against one snapshot of the live schema. Raises what check_query_guards raises."""
-    facts = _live_facts()
-    return _guards(document, facts) or _schema_errors(document, facts)
-
-
-def check_query_guards(document: DocumentNode) -> Optional[str]:
-    """Return why an LLM-generated query must not be sent, or None when it may be.
+    against one snapshot of the live schema (starting its refresh when due).
 
     Raises GraphQLError for a fragment that reaches itself, directly or through nested fields, and for a query that
     expands to more than MAX_VISITED_FIELDS fields or nests deeper than the recursion limit.
     """
-    return _guards(document, _live_facts())
+    facts = _live_facts()
+    return _guards(document, facts) or _schema_errors(document, facts)
 
 
 def _guards(document: DocumentNode, facts: Optional["SchemaFacts"]) -> Optional[str]:
@@ -518,6 +508,7 @@ def _closed_schema_errors(document: DocumentNode, facts: "SchemaFacts") -> Optio
 # again after SCHEMA_RETRY_SECONDS.
 SCHEMA_TTL_SECONDS = tools_introspection.CACHE_TTL_SECONDS
 SCHEMA_RETRY_SECONDS = 60
+SCHEMA_REFRESH_JITTER_SECONDS = 60
 
 
 class SchemaFacts:
@@ -699,7 +690,12 @@ def refresh_schema() -> None:
     try:
         schema, taken_at = _fetch_schema()
         _live = SchemaFacts(schema)
-        _next_refresh_at = time.monotonic() + max(0.0, taken_at + SCHEMA_TTL_SECONDS - time.time())
+        # The processes that loaded the same cache file would all fall due at once and each introspect the API: a
+        # random delay lets the first one write the file the others then read.
+        due_in = max(0.0, taken_at + SCHEMA_TTL_SECONDS - time.time()) + random.uniform(
+            0, SCHEMA_REFRESH_JITTER_SECONDS
+        )
+        _next_refresh_at = time.monotonic() + due_in
     except Exception as e:
         logger.warning("GraphQL schema introspection failed, keeping the schema there was (if any): %s", e)
         _next_refresh_at = time.monotonic() + SCHEMA_RETRY_SECONDS
@@ -732,13 +728,9 @@ def live_schema() -> Optional[GraphQLSchema]:
     return facts.schema if facts else None
 
 
-def check_against_schema(document: DocumentNode) -> Optional[str]:
+def _schema_errors(document: DocumentNode, facts: Optional[SchemaFacts]) -> Optional[str]:
     """Why the API would refuse the query, or None: every field, argument and type it uses must exist, and none may be
     deprecated (a deprecated field is about to leave the API; its deprecation reason names the replacement)."""
-    return _schema_errors(document, _live_facts())
-
-
-def _schema_errors(document: DocumentNode, facts: Optional[SchemaFacts]) -> Optional[str]:
     if facts is None:
         return None
     errors = validate(facts.schema, document, [*specified_rules, NoDeprecatedCustomRule])
