@@ -431,9 +431,9 @@ ROW_NOTES = {
     "result": '{"range": {...}, "data": [rows]}: the rows in "data" with snake_case keys, numbers as strings (amounts in upokt), and the part of the range the data covers in "range". No rows, or a missing row, in a part of the range outside covered_from / covered_to or in a gap is not covered yet, never none or 0.',
 }
 # Rules shared by the functions that answer the current state (getSupplierFleetList, getApplicationFleetList,
-# getServiceSummaryList, getMorseClaimSummaryList): their rows are selected like a list's fields. They have no keyset and
-# no blockHeight, so they are not walked page by page (an offset walk over a list ordered by stake skips or repeats rows
-# whose stake changes between calls).
+# getServiceSummaryList, getMorseClaimSummaryList): their rows are selected like a list's fields. They take no
+# blockHeight, and an offset walk over a list ordered by stake skips or repeats rows whose stake changes between calls,
+# so they are not paged by offset; getSupplierFleetList has its own keyset (rowLimit, after...).
 NOW_NOTES = {
     "result": "Rows with camelCase fields to select, e.g. { stakeUpokt supplierCount }; amounts in upokt. One call returns a limited number of rows: an answer that may be cut is a part of the list, never all of it. Do not page these functions by offset; for every row of a long list, use the entity list (suppliers, applications) paged by keyset with one pinned blockHeight.",
 }
@@ -450,7 +450,7 @@ GRAPHQL_REGISTRY = {
             "# Top accounts by upokt balance (rich list), with last-activity block\n"
             'query { balances(first: 20, orderBy: AMOUNT_DESC, filter: {denom: {equalTo: "upokt"}}) '
             "{ totalCount nodes { accountId amount denom lastUpdatedBlockId } } }",
-            "# Count accounts active (balance updated) since a block height (a date's height: getHeightAt)\n"
+            "# Count accounts active (balance updated) since a block height (since a date: getActiveAccountsList)\n"
             'query { balances(filter: {lastUpdatedBlockId: {greaterThanOrEqualTo: "950000"}, '
             'denom: {equalTo: "upokt"}}) { totalCount } }',
         ],
@@ -501,7 +501,7 @@ GRAPHQL_REGISTRY = {
             "timeToBlock": "Time spent generating the block in milliseconds.",
             "size": "Block size in bytes.",
             "hash": "Block hash; use filter {hash: {equalTo: ...}} to look up a block by hash.",
-            "totals": "Sums and averages over many blocks (relays, compute units, transactions, block time and size): getBlockStatsJson. The supply: getTotalSupplyBetweenDates.",
+            "totals": "Sums and averages over many blocks (relays, compute units, transactions, block time and size): getBlockStatsJson. The supply: getTotalSupplyBetweenDates; one block's supply per denomination: getBlockSuppliesList.",
         },
         examples=[
             "# Latest block with network-wide snapshot fields (staked actors, supply, relays)\n"
@@ -891,6 +891,9 @@ GRAPHQL_REGISTRY = {
         fields_notes={
             "suppliers/owners/operators/domains": "Up to 200 addresses or domains in one of these lists; give at most one. owners = the suppliers they own now; operators = the Staked suppliers whose service configs share revenue with those addresses now.",
             "total": "bySupplier: false = one row for the whole group (supplierCount, stakeUpokt) instead of one per supplier.",
+            "rowLimit": "One page (up to 1000 rows) in its order, largest stake first; for the next page pass the last row's stakeUpokt and supplierId as afterStakeUpokt and afterSupplierId; a page shorter than rowLimit is the last one. Faster than every row.",
+            "maxStakeUpokt": "Keeps the suppliers whose stake is below it.",
+            "serviceDomains": "With services: the endpoint root domains of each supplier's live configs for those services.",
             **NOW_NOTES,
         },
         examples=[
@@ -901,6 +904,39 @@ GRAPHQL_REGISTRY = {
             "{ supplierCount stakeUpokt } }",
             "# The suppliers of an owner, largest stake first\n"
             'query { getSupplierFleetList(owners: ["pokt1..."]) { supplierId stakeStatus stakeUpokt serviceCount } }',
+            "# Staked suppliers of a service with a stake below 100k POKT, with their domains for that service, one page\n"
+            'query { getSupplierFleetList(services: ["eth"], stakeStatuses: ["Staked"], maxStakeUpokt: "100000000000", '
+            "rowLimit: 100) { supplierId stakeUpokt serviceDomains } }",
+            "# Next page: the last row's stakeUpokt and supplierId\n"
+            'query { getSupplierFleetList(stakeStatuses: ["Staked"], rowLimit: 100, afterStakeUpokt: "60000000000", '
+            'afterSupplierId: "pokt1...") { supplierId stakeUpokt serviceCount } }',
+        ],
+    ),
+    "getStakedSuppliersList": QueryFieldInfo(
+        name="getStakedSuppliersList",
+        description="Suppliers now, one row each, ordered by supplier id: owner, operator, stake, and the service ids and endpoint root domains of their live service configs. stakeStatuses (Staked, Unstaking, Unstaked) picks the statuses (default Staked); a supplier that is not Staked shows the configs it had when it last closed them. Use it for a page of suppliers with their services, in any status. For a fleet by stake, with filters, use getSupplierFleetList.",
+        fields_notes={
+            "rowLimit": "Rows per call: default and most 1000. For the next page pass the last row's supplierId as afterSupplierId; a page shorter than rowLimit is the last one. Not first / offset.",
+            "result": "Rows with camelCase fields to select: supplierId ownerId operatorId stakeUpokt serviceIds domains; amounts in upokt.",
+        },
+        examples=[
+            "# Staked suppliers with their services and domains, first page\n"
+            "query { getStakedSuppliersList(rowLimit: 100) { supplierId ownerId stakeUpokt serviceIds domains } }",
+            "# Suppliers in any status with their services, next page after a supplier\n"
+            'query { getStakedSuppliersList(stakeStatuses: ["Staked", "Unstaking", "Unstaked"], rowLimit: 100, '
+            'afterSupplierId: "pokt1...") { supplierId stakeUpokt serviceIds } }',
+        ],
+    ),
+    "getStakedDomainServicesList": QueryFieldInfo(
+        name="getStakedDomainServicesList",
+        description="The live service configs of the Staked suppliers counted per (endpoint root domain, service): configs = the configs whose endpoints are on that domain. totalConfigs and totalSuppliers (every live config of the Staked suppliers and their distinct suppliers) come on every row of the first page, to check that a read over all pages is complete. Use it for which domains serve which services and how many configs each has.",
+        fields_notes={
+            "rowLimit": "Rows per call, ordered by domain then serviceId: default and most 1000. For the next page pass the last row's domain and serviceId as afterDomain and afterServiceId; a page shorter than rowLimit is the last one.",
+            "result": "Rows with camelCase fields to select: domain serviceId configs totalConfigs totalSuppliers.",
+        },
+        examples=[
+            "# Configs per domain and service, first page, with the totals to check completeness\n"
+            "query { getStakedDomainServicesList(rowLimit: 1000) { domain serviceId configs totalConfigs totalSuppliers } }",
         ],
     ),
     "getStakedSupplierServicesList": QueryFieldInfo(
@@ -937,9 +973,9 @@ GRAPHQL_REGISTRY = {
         name="getGatewayDelegationsList",
         description="Some gateways (up to 200) and the applications delegating to them at a height (atHeight omitted = now): each gateway's stake and status, and each delegated application's stake, status and service ids, as of that height. One row per (gateway, application); a gateway with no delegation has one row with null application columns.",
         fields_notes={
-            "atHeight": "A block height; for a date, getHeightAt(atTime) gives the height.",
+            "atHeight": "A block height (omitted = the last height the indexer processed); for a date, getHeightAt(atTime) gives the height. Every row carries the height it was read at (height): pass it as atHeight on the next pages, so the pages are one read.",
             "rowLimit": "Rows per call, ordered by gatewayId then applicationId. For the next page pass the last row's gatewayId and applicationId as afterGatewayId and afterApplicationId; a page shorter than rowLimit is the last one.",
-            "result": "Rows with camelCase fields to select: gatewayId gatewayStakeUpokt gatewayStakeStatus applicationId stakeUpokt stakeStatus serviceIds; amounts in upokt.",
+            "result": "Rows with camelCase fields to select: gatewayId gatewayStakeUpokt gatewayStakeStatus applicationId stakeUpokt stakeStatus serviceIds height; amounts in upokt.",
         },
         examples=[
             "# The applications delegating to a gateway now, with their stake and services\n"
@@ -947,6 +983,30 @@ GRAPHQL_REGISTRY = {
             "serviceIds } }",
             "# The same at a past height\n"
             'query { getGatewayDelegationsList(gateways: ["pokt1..."], atHeight: "950000") { applicationId stakeUpokt } }',
+        ],
+    ),
+    "getActiveAccountsList": QueryFieldInfo(
+        name="getActiveAccountsList",
+        description="Accounts active since each of some times (up to 20): accounts = the upokt balances last updated in a block at or after the time (null when beyondTip: no indexed block that late yet), and height = the newest block before the time. Use it for how many accounts were active since a date, in one request.",
+        fields_notes={
+            "sinceTimes": "Times in UTC with an explicit zone, e.g. 2026-10-01T00:00:00Z.",
+            "result": "Rows with camelCase fields to select: sinceTime height beyondTip accounts.",
+        },
+        examples=[
+            "# Accounts active since a date, and since a week before it\n"
+            'query { getActiveAccountsList(sinceTimes: ["2026-10-13T00:00:00Z", "2026-10-06T00:00:00Z"]) '
+            "{ sinceTime height beyondTip accounts } }",
+        ],
+    ),
+    "getBlockSuppliesList": QueryFieldInfo(
+        name="getBlockSuppliesList",
+        description="The supply at a block height: one row per denomination with its amount in that denomination's own base unit (upokt for upokt, mact for mact; not converted). No row for a height without recorded supply.",
+        fields_notes={
+            "height": "A block height; for a date, getHeightAt(atTime) gives it.",
+            "result": "Rows with camelCase fields to select: denom amount.",
+        },
+        examples=[
+            '# Supply per denomination at a block\nquery { getBlockSuppliesList(height: "964000") { denom amount } }',
         ],
     ),
     "getHeightAt": QueryFieldInfo(
@@ -978,12 +1038,14 @@ GRAPHQL_REGISTRY = {
     ),
     "getServiceSummaryList": QueryFieldInfo(
         name="getServiceSummaryList",
-        description="Services now: per service, the suppliers configured for it (suppliers) and how many of them are Staked (stakedSuppliers), the applications staked for it (applications) and how many are Staked (stakedApplications), and its current relay mining difficulty from its newest update (numRelaysEma, targetHashHex, difficultyUpdatedHeight; null when it never had one). services = those (up to 200); omitted = every service with a supplier or an application.",
+        description="Services now: per service, the suppliers configured for it (suppliers) and how many of them are Staked (stakedSuppliers), the applications staked for it (applications) and how many are Staked (stakedApplications), and its current relay mining difficulty from its newest update (numRelaysEma, targetHashHex, difficultyUpdatedHeight; null when it never had one). services = those (up to 200); omitted = every service with a supplier or an application. owners (up to 200) keeps the services those addresses own now.",
         fields_notes=NOW_NOTES,
         examples=[
             "# Suppliers, applications and current difficulty per service\n"
             'query { getServiceSummaryList(services: ["eth", "base"]) { serviceId stakedSuppliers suppliers '
             "stakedApplications applications numRelaysEma difficultyUpdatedHeight } }",
+            "# The services an address owns, with their suppliers and applications\n"
+            'query { getServiceSummaryList(owners: ["pokt1..."]) { serviceId suppliers stakedSuppliers applications } }',
         ],
     ),
     "getRelayMiningDifficultyJson": QueryFieldInfo(
@@ -1069,6 +1131,7 @@ GRAPHQL_REGISTRY = {
             "suppliers/owners/operators": "suppliers = those (up to 200); owners = the suppliers they own now; operators = the Staked suppliers whose service configs share revenue with those addresses now, with all its claims. Give at most one.",
             **ROW_NOTES,
             "before...": "beforeHeight and beforeEventIdx: the height and event_idx of the last row of the previous page.",
+            "owner": "supplier_owner_id is the owner the settlement recorded (null for expired claims); current_owner_id is the supplier's owner now.",
             "coverage": COVERAGE_NOTE,
         },
         examples=[
@@ -1156,7 +1219,7 @@ GRAPHQL_REGISTRY = {
             "suppliers": "Supplier (operator) addresses, up to 200; omit both suppliers and owners for every supplier (then use bySupplier: false).",
             "owners": "Owner addresses in place of suppliers: the suppliers they own now.",
             "services": "Up to 200 services: only the claims of those services.",
-            "byService/byApplication/bySupplier": "Split by service, by application, or per supplier (bySupplier defaults to true when suppliers are given).",
+            "byService/byApplication/bySupplier": "Split by service, by application, or per supplier (bySupplier defaults to true when suppliers are given). With byApplication, gateway_ids = the application's gateways now.",
             "claimed_upokt": "upokt the suppliers claimed; settled_upokt is what was paid after overservicing.",
         },
         examples=[

@@ -732,6 +732,7 @@ class TokenomicsAgent(QueryBuilderSubAgent):
         "getComputeUnitsToTokensMultiplierEvolution",
         "getDaoBalanceAtHeight",
         "getMorseClaimSummaryList",
+        "getBlockSuppliesList",
     ]
     rpc_methods = [
         "get_total_supply",
@@ -837,6 +838,8 @@ class ServiceEconomicsAgent(QueryBuilderSubAgent):
         "getRelayMiningDifficultyJson",
         "getServiceSummaryList",
         "getStakedSupplierServicesList",
+        "getStakedDomainServicesList",
+        "getStakedSuppliersList",
         "getRewardsByDomainsAndTimeGroupByService",
         "getSupplierFleetList",
         "getSupplierEarningsJson",
@@ -938,6 +941,7 @@ class StakingParticipantStateAgent(QueryBuilderSubAgent):
         "applicationGateways",
         "applicationServices",
         "getSupplierFleetList",
+        "getStakedSuppliersList",
         "getStakedSupplierServicesList",
         "getApplicationFleetList",
         "getGatewayFleetList",
@@ -1002,6 +1006,7 @@ class AccountStateAgent(QueryBuilderSubAgent):
         "morseClaimableAccounts",
         "getMorseClaimSummaryList",
         "getHeightAt",
+        "getActiveAccountsList",
     ]
     rpc_methods = [
         "get_account_balance",
@@ -1018,6 +1023,7 @@ You specialize in querying the token balance and migration state of plain user a
 
 If the user provides an address, it is a bech32 pokt1… address for Shannon queries, or a hex address for Morse queries.
 If the user asks where a wallet sent or received tokens, use nativeTransfers filtered by senderId and/or recipientId.
+If the user asks how many accounts were active since a date, use getActiveAccountsList.
 If the user asks about "claiming" or "migration" in the context of a specific address, use the RPC method get_morse_claimable_account; for the accounts one by one use the GraphQL morseClaimableAccounts, and for migration totals (claimed vs unclaimed) getMorseClaimSummaryList.
 
 Hint – get_account_balance requires the address as a path parameter substituted directly into the URL path, not as a query parameter.
@@ -1043,6 +1049,7 @@ class ChainActivityAgent(QueryBuilderSubAgent):
         "accounts",
         "balances",
         "getHeightAt",
+        "getBlockSuppliesList",
         "validators",
         "getProducedBlocksByValidator",
         "getMissingValidatorBlocks",
