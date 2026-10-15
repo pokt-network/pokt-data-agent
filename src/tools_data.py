@@ -10,12 +10,12 @@ from langchain_core.tools import tool
 
 from src.graphql_client import (
     GRAPHQL_REGISTRY,
+    MAX_RESULT_CHARS,
     POCKET_NETWORK_DATA_ENDPOINT,
     PocketNetworkAPIClient,
-    page_notes,
     range_notes,
 )
-from src.graphql_validator import LIVE_REWARD_FIELDS, MAX_FIRST, check_query
+from src.graphql_validator import LIVE_REWARD_FIELDS, MAX_FIRST, check_query, page_notes
 from src.query_sub_agents import ALL_SUBAGENTS
 from src.rpc_client import (
     POCKET_NETWORK_RPC_ENDPOINT,
@@ -171,8 +171,6 @@ def get_method_examples(method_name: str, protocol: str) -> List[str]:
 # ---------------------------- EXECUTION TOOLS ---------------------------------
 ################################################################################
 
-# Longest result handed back to the calling LLM, in characters of JSON.
-MAX_RESULT_CHARS = 100_000
 
 EXECUTE_GRAPHQL_DESCRIPTION = f"""Executes a GraphQL method call and returns the result ("data" field) along with a sucess flag and an error string if not success.
 
@@ -187,10 +185,13 @@ Guards, checked before the query is sent:
   and after: <endCursor>. A walk over several pages pins the same blockHeight on every page (the _metadata
   lastProcessedHeight read once before the first page, data_get_indexer_status), so the pages are one consistent read;
   stop when hasNextPage is false, and check the rows add up to totalCount. Row functions (getClaimsJson,
-  getActorLifecycleJson, getStakedSupplierServicesList, ...) page with their before... / after... keys. The functions
-  without keys (getSupplierFleetList, getApplicationFleetList, ...) are not paged by offset: use their one-total form,
-  or the entity list. A result that is one page of a longer list comes with a "Page:" note: never report it as the
-  whole list.
+  getActorLifecycleJson, ...) and keyset lists (getSupplierFleetList with rowLimit, getStakedSuppliersList,
+  getStakedSupplierServicesList, getStakedDomainServicesList, getGatewayDelegationsList) page with their before... /
+  after... keys (an offset on a keyset list is refused); such a keyset is not one snapshot either: a row that changes
+  between pages can repeat or go missing (getSupplierFleetList orders by stake). The functions without keys
+  (getApplicationFleetList, getGatewayFleetList, getServiceSummaryList) are not paged by offset: use their one-total
+  form, or the entity list. A function list is cut at 1000 rows with no signal. A result that is one page of a longer
+  list comes with a "Page:" note: never report it as the whole list.
 - What the API no longer serves is refused, with what to use instead: the event and message tables
   (eventClaimSettleds, msgStake..., ...), relations from one entity to another (select the id column, e.g. blockId,
   and query the other entity on its own), filters through a relation, aggregates and groupedAggregates (use totalCount
@@ -234,7 +235,7 @@ def execute_graphql(query: str) -> Tuple[bool, Any, str | None]:
         notes = (
             " ".join(
                 [f"Coverage: {note}" for note in range_notes(result)]
-                + [f"Page: {note}" for note in page_notes(query, result)]
+                + [f"Page: {note}" for note in page_notes(document, result)]
             )
             or None
         )

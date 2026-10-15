@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from graphql import parse
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
@@ -17,10 +18,9 @@ from src.graphql_client import (
     PocketNetworkAPIClient,
     final_error_reply,
     is_fixable_query_error,
-    page_notes,
     range_notes,
 )
-from src.graphql_validator import validate_graphql_query
+from src.graphql_validator import page_notes, validate_graphql_query
 from src.models import QueryFieldInfo, SubAgentResult
 from src.rpc_client import POCKET_NETWORK_RPC_ENDPOINT, RPC_METHODS, PocketNetworkRPCClient
 from src.rpc_validator import validate_rpc_call
@@ -640,7 +640,7 @@ Return ONLY the JSON object, no extra text or markdown."""
         coverage = "".join(f"\nCoverage: {note}" for note in notes)
         if endpoint_type == "graphql":
             coverage += "".join(
-                f"\nPage: {note}" for note in page_notes(final_state["query"], final_state.get("query_result"))
+                f"\nPage: {note}" for note in page_notes(parse(final_state["query"]), final_state.get("query_result"))
             )
         return SubAgentResult(
             query=final_state["query"],

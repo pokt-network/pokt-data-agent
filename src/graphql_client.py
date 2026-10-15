@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from typing import Any, List, Tuple
 
 import requests
-from graphql import FieldNode, GraphQLError, IntValueNode, OperationDefinitionNode, parse
 
 from src.models import QueryFieldInfo
 
@@ -316,76 +315,9 @@ def range_notes(result: Any) -> List[str]:
     return [note for name, data, range_ in _ranged_fields(result) for note in _field_notes(name, data, range_)]
 
 
-# Functions that list rows one by one, newest first, at most rowLimit a call (DEFAULT_ROW_LIMIT when omitted), paged
-# with before...: pocketdex CATALOG_FUNCTIONS minus the money catalog (graphql_validator.CATALOG_FUNCTIONS).
-ROW_FUNCTIONS = frozenset(
-    {
-        "getClaims",
-        "getActorLifecycle",
-        "getRelayMiningDifficulty",
-        "getCreatedClaims",
-        "getMorseClaims",
-    }
-)
-DEFAULT_ROW_LIMIT = 100
-# The most rows one call of a function list returns, whatever "first" or "rowLimit" asks: the API's query limit (both
-# endpoints, 2026-10-14), which cuts the list with no signal (getSupplierFleetList Staked: 1000 of 4,558 with
-# first: 2000). A call that returns that many may have more.
-MAX_LIST_ROWS = 1000
-
-
-def _int_argument(field: FieldNode, name: str) -> int | None:
-    value = next((arg.value for arg in field.arguments if arg.name.value == name), None)
-    return int(value.value) if isinstance(value, IntValueNode) else None
-
-
-def _page_note(field: FieldNode, key: str, value: Any) -> str | None:
-    """Why the rows of one root field are a page of a longer list, or None."""
-    name = field.name.value
-    first, row_limit = _int_argument(field, "first"), _int_argument(field, "rowLimit")
-    if isinstance(value, dict) and isinstance(value.get("nodes", value.get("edges")), list):
-        rows = len(value.get("nodes", value.get("edges")))
-        more = (value.get("pageInfo") or {}).get("hasNextPage")
-        total = value.get("totalCount")
-        if more or (isinstance(total, int) and total > rows) or (more is None and first is not None and rows >= first):
-            of = f" of {total}" if isinstance(total, int) else ""
-            return f"{key} returned {rows} rows{of}: one page of a longer list (the next page: after its endCursor)."
-        return None
-    if isinstance(value, list):
-        limit = min([n for n in (first, row_limit) if n is not None] + [MAX_LIST_ROWS])
-        if len(value) >= limit:
-            return f"{key} returned {len(value)} rows, the most this call returns: there may be more."
-        return None
-    if name.endswith("Json") and name[: -len("Json")] in ROW_FUNCTIONS:
-        data, _ = unwrap_range(value)
-        limit = row_limit or DEFAULT_ROW_LIMIT
-        if isinstance(data, list) and len(data) >= limit:
-            return (
-                f"{key} returned {len(data)} rows, its rowLimit: there may be more (the next page: the before... "
-                "arguments with the last row's keys)."
-            )
-    return None
-
-
-def page_notes(query: str, result: Any) -> List[str]:
-    """What the answer must say about a list that came back as one page of a longer one: never all of it."""
-    try:
-        document = parse(query)
-    except (GraphQLError, RecursionError):
-        return []
-    if not isinstance(result, dict):
-        return []
-    notes = []
-    for definition in document.definitions:
-        if not isinstance(definition, OperationDefinitionNode):
-            continue
-        for field in definition.selection_set.selections:
-            if isinstance(field, FieldNode):
-                key = field.alias.value if field.alias else field.name.value
-                note = _page_note(field, key, result.get(key))
-                if note:
-                    notes.append(note + " Say the answer is a part of the list, never all of it.")
-    return notes
+# Longest result handed to a model, in characters of JSON: what the MCP tool returns and what the sub-agent answer is
+# written from.
+MAX_RESULT_CHARS = 100_000
 
 
 def not_covered_error(result: Any) -> str | None:
@@ -431,12 +363,21 @@ ROW_NOTES = {
     "result": '{"range": {...}, "data": [rows]}: the rows in "data" with snake_case keys, numbers as strings (amounts in upokt), and the part of the range the data covers in "range". No rows, or a missing row, in a part of the range outside covered_from / covered_to or in a gap is not covered yet, never none or 0.',
 }
 # Rules shared by the functions that answer the current state (getSupplierFleetList, getApplicationFleetList,
-# getServiceSummaryList, getMorseClaimSummaryList): their rows are selected like a list's fields. They take no
-# blockHeight, and an offset walk over a list ordered by stake skips or repeats rows whose stake changes between calls,
-# so they are not paged by offset; getSupplierFleetList has its own keyset (rowLimit, after...).
+# getGatewayFleetList, getServiceSummaryList, getMorseClaimSummaryList): their rows are selected like a list's fields.
+# They take no blockHeight and are cut at 1000 rows with no signal. An offset walk over rows ordered by stake skips or
+# repeats the rows whose stake changes between calls, so they are not paged by offset; getSupplierFleetList has its
+# own keyset (SUPPLIER_FLEET_PAGING), which is not a snapshot either.
 NOW_NOTES = {
-    "result": "Rows with camelCase fields to select, e.g. { stakeUpokt supplierCount }; amounts in upokt. One call returns a limited number of rows: an answer that may be cut is a part of the list, never all of it. Do not page these functions by offset; for every row of a long list, use the entity list (suppliers, applications) paged by keyset with one pinned blockHeight.",
+    "result": "Rows with camelCase fields to select, e.g. { stakeUpokt supplierCount }; amounts in upokt.",
+    "paging": "At most 1000 rows a call, cut with no signal: an answer of 1000 rows is a part of the list, never all of it. Not paged by offset: for counts and sums use the one-total form, and for every row of a long list the entity list (applications, gateways, services) paged by keyset with one pinned blockHeight.",
 }
+SUPPLIER_FLEET_PAGING = (
+    "With rowLimit (up to 1000): one page, largest stake first; for the next page pass the last row's stakeUpokt and "
+    "supplierId as afterStakeUpokt and afterSupplierId, until a page comes back short. Never offset, and never more "
+    "than 1000 rows without rowLimit (the list is cut with no signal). This keyset is not a snapshot: a supplier whose "
+    "stake changes between pages can repeat or go missing. For every supplier in one consistent read, page the "
+    "suppliers list by keyset with one pinned blockHeight."
+)
 
 # Registry of available GraphQL query fields with descriptions
 GRAPHQL_REGISTRY = {
@@ -891,10 +832,10 @@ GRAPHQL_REGISTRY = {
         fields_notes={
             "suppliers/owners/operators/domains": "Up to 200 addresses or domains in one of these lists; give at most one. owners = the suppliers they own now; operators = the Staked suppliers whose service configs share revenue with those addresses now.",
             "total": "bySupplier: false = one row for the whole group (supplierCount, stakeUpokt) instead of one per supplier.",
-            "rowLimit": "One page (up to 1000 rows) in its order, largest stake first; for the next page pass the last row's stakeUpokt and supplierId as afterStakeUpokt and afterSupplierId; a page shorter than rowLimit is the last one. Faster than every row.",
             "maxStakeUpokt": "Keeps the suppliers whose stake is below it.",
             "serviceDomains": "With services: the endpoint root domains of each supplier's live configs for those services.",
             **NOW_NOTES,
+            "paging": SUPPLIER_FLEET_PAGING,
         },
         examples=[
             "# Staked suppliers: count and total stake\n"
@@ -979,11 +920,12 @@ GRAPHQL_REGISTRY = {
             "result": "Rows with camelCase fields to select: gatewayId gatewayStakeUpokt gatewayStakeStatus applicationId stakeUpokt stakeStatus serviceIds height; amounts in upokt.",
         },
         examples=[
-            "# The applications delegating to a gateway now, with their stake and services\n"
-            'query { getGatewayDelegationsList(gateways: ["pokt1..."]) { gatewayId applicationId stakeUpokt stakeStatus '
-            "serviceIds } }",
-            "# The same at a past height\n"
-            'query { getGatewayDelegationsList(gateways: ["pokt1..."], atHeight: "950000") { applicationId stakeUpokt } }',
+            "# The applications delegating to a gateway now, with their stake and services, and the height read\n"
+            'query { getGatewayDelegationsList(gateways: ["pokt1..."], rowLimit: 100) { gatewayId applicationId stakeUpokt '
+            "stakeStatus serviceIds height } }",
+            "# Next page: the first page's height as atHeight, and the last row's gatewayId and applicationId\n"
+            'query { getGatewayDelegationsList(gateways: ["pokt1..."], rowLimit: 100, atHeight: "950000", '
+            'afterGatewayId: "pokt1...", afterApplicationId: "pokt1...") { gatewayId applicationId stakeUpokt height } }',
         ],
     ),
     "getActiveAccountsList": QueryFieldInfo(

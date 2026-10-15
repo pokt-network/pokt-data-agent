@@ -1,5 +1,6 @@
 """Main LangGraph agent orchestrator."""
 
+import json
 import logging
 from typing import Any, Dict
 
@@ -8,7 +9,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
-from src.graphql_client import final_error_reply
+from src.graphql_client import MAX_RESULT_CHARS, final_error_reply
 from src.query_sub_agents import create_sub_agents
 
 logger = logging.getLogger(__name__)
@@ -165,6 +166,16 @@ Respond ONLY with the selected agent name, if no sub-agent can fulfil the query,
         """Format the successful response for the user."""
         logger.info("--- format_response ---")
 
+        # A long result is cut before it reaches the model, as the MCP tool does, and the model is told so.
+        result = json.dumps(state.get("query_result"), default=str)
+        cut = ""
+        if len(result) > MAX_RESULT_CHARS:
+            cut = (
+                f"\nThe result was cut to {MAX_RESULT_CHARS} of {len(result)} characters (the JSON is cut): say that "
+                "the answer covers a part of it."
+            )
+            result = result[:MAX_RESULT_CHARS]
+
         llm_query = f"""
 Format a response to the use query, based on the obtained data:
 User query:
@@ -172,7 +183,7 @@ User query:
 
 Obtained data:
 - query: {state.get("query")}
-- result: {state.get("query_result")}
+- result: {result}{cut}
 - notes: {state.get("agent_notes", "")}
 - endpoint_type: {state.get("endpoint_type", "graphql")}
 

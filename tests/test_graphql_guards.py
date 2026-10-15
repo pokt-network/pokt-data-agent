@@ -157,11 +157,21 @@ class TestQueryGuards(unittest.TestCase):
             "{ suppliers(first: 100, offset: 0) { nodes { id } } }",
             '{ suppliers(first: 100, orderBy: ID_ASC, blockHeight: "964638", after: "abc") '
             "{ totalCount pageInfo { hasNextPage endCursor } nodes { id } } }",
-            # a function's rows are not a live list's connection
-            '{ getSupplierFleetList(owners: ["pokt1x"], first: 1000, offset: 1000) { supplierId } }',
+            # a function without a keyset is not refused for an offset (the notes teach not to use it)
+            "{ getApplicationFleetList(first: 100, offset: 100) { applicationId } }",
+            '{ getSupplierFleetList(owners: ["pokt1x"], rowLimit: 100, afterStakeUpokt: "1", afterSupplierId: "p") '
+            "{ supplierId } }",
         ):
             with self.subTest(query=query):
                 self.assertIsNone(guard(query))
+
+    def test_keyset_lists_are_not_paged_by_offset(self):
+        for name in sorted(graphql_validator.KEYSET_LISTS):
+            for offset in ("1000", "$o"):
+                query = f"query ($o: Int) {{ {name}(offset: {offset}) {{ __typename }} }}"
+                with self.subTest(name=name, offset=offset):
+                    self.assertIn(f'"{name}" pages by its keyset, never by offset', guard(query))
+        self.assertIsNone(guard("{ getStakedSuppliersList(offset: 0, rowLimit: 10) { supplierId } }"))
 
     def test_aggregates_are_refused(self):
         for query in (
@@ -583,11 +593,19 @@ class TestSchemaCheck(unittest.TestCase):
                 os.utime(path, (old, old))
                 graphql_validator._introspection()
                 self.assertEqual(introspect.call_count, 2)
+                # a file of another endpoint is not read
+                with open(path) as cache:
+                    content = json.load(cache)
+                content["endpoint"] = "https://other.example/graphql"
+                with open(path, "w") as cache:
+                    json.dump(content, cache)
+                graphql_validator._introspection()
+                self.assertEqual(introspect.call_count, 3)
                 # a file of another pruning version is not read
                 with open(path, "w") as cache:
                     json.dump({"version": graphql_validator.PRUNE_VERSION + 1, "introspection": {}}, cache)
                 graphql_validator._introspection()
-                self.assertEqual(introspect.call_count, 3)
+                self.assertEqual(introspect.call_count, 4)
 
     def test_the_next_refresh_is_due_one_ttl_after_the_introspection_it_used(self):
         # a disk cache another process wrote 50 minutes ago is due again in 10 minutes, not in an hour

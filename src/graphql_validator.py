@@ -48,7 +48,7 @@ from graphql import (
 from graphql.validation import NoDeprecatedCustomRule
 
 from src import tools_introspection
-from src.graphql_client import GRAPHQL_REGISTRY, ROW_FUNCTIONS
+from src.graphql_client import GRAPHQL_REGISTRY, unwrap_range
 
 logger = logging.getLogger(__name__)
 
@@ -97,8 +97,33 @@ CATALOG_FUNCTIONS = frozenset(
         "getBlockStats",
     }
 )
-# The rest of pocketdex CATALOG_FUNCTIONS is ROW_FUNCTIONS (graphql_client): their ...List variant and their ...Json
-# twin return the same rows, the twin with the range.
+# The rest of pocketdex CATALOG_FUNCTIONS: functions that list rows one by one, newest first, at most rowLimit a call
+# (DEFAULT_ROW_LIMIT when omitted), paged with before...; their ...List variant and their ...Json twin return the same
+# rows, the twin with the range.
+ROW_FUNCTIONS = frozenset(
+    {
+        "getClaims",
+        "getActorLifecycle",
+        "getRelayMiningDifficulty",
+        "getCreatedClaims",
+        "getMorseClaims",
+    }
+)
+DEFAULT_ROW_LIMIT = 100
+# Function lists paged by their own keyset (rowLimit and the after... keys of the last row): an offset is refused.
+KEYSET_LISTS = frozenset(
+    {
+        "getSupplierFleetList",
+        "getStakedSuppliersList",
+        "getStakedSupplierServicesList",
+        "getStakedDomainServicesList",
+        "getGatewayDelegationsList",
+    }
+)
+# The most rows one call of a function list returns, whatever "first" or "rowLimit" asks: the API's query limit (both
+# endpoints, 2026-10-14), which cuts the list with no signal (getSupplierFleetList Staked: 1000 of 4,558 with
+# first: 2000). A call that returns that many may have more.
+MAX_LIST_ROWS = 1000
 # The lists and functions the closed pocketdex schema drops (docs/graphql-migration.md), with what replaces them. The
 # event and message tables not named here are hidden too (EVENT_PREFIXES). The live schema's deprecation reason, when
 # there is one, is said instead: these are the fallback while the API cannot be introspected.
@@ -245,6 +270,16 @@ def _child_fields(
     return fields
 
 
+def _argument(field: FieldNode, name: str) -> Optional[ValueNode]:
+    return next((arg.value for arg in field.arguments if arg.name.value == name), None)
+
+
+def _int_argument(field: FieldNode, name: str) -> Optional[int]:
+    """The literal integer value of an argument, or None (absent, a variable, or not an integer)."""
+    value = _argument(field, name)
+    return int(value.value) if isinstance(value, IntValueNode) else None
+
+
 def _relation_filter(value: ValueNode, operators: Optional[FrozenSet[str]]) -> Optional[str]:
     """Why a filter value filters through a relation (or holds a misspelled operator, which reads the same, or a
     variable, whose keys cannot be checked), else None. With operators None only the variables are checked: the
@@ -348,6 +383,11 @@ def _check_field(
             )
             if order:
                 return f'"{name}" orders by {order}, which is not one of its own columns: {ORDER_HINT}'
+    if name in KEYSET_LISTS and _argument(field, "offset") is not None and _int_argument(field, "offset") != 0:
+        return (
+            f'"{name}" pages by its keyset, never by offset: pass rowLimit, and for the next page the keys of the last '
+            "row as the after... arguments, until a page comes back short."
+        )
     if field.selection_set is None:
         return None
     if level == "row" and not facts:
@@ -355,16 +395,15 @@ def _check_field(
 
     children = _child_fields(field.selection_set, fragments, path)
     if any(child.name.value in ("nodes", "edges") for child, _ in children):
-        first = next((arg.value for arg in field.arguments if arg.name.value == "first"), None)
-        offset = next((arg.value for arg in field.arguments if arg.name.value == "offset"), None)
-        if offset is not None and not (isinstance(offset, IntValueNode) and int(offset.value) == 0):
+        first = _int_argument(field, "first")
+        if _argument(field, "offset") is not None and _int_argument(field, "offset") != 0:
             # Rows written or removed between two pages shift the offsets: rows are skipped or repeated, silently.
             return (
                 f'"{name}" pages by offset, which skips or repeats rows when the list changes between pages: page by '
                 "keyset instead, with a fixed orderBy (e.g. ID_ASC), pageInfo { hasNextPage endCursor } and after: "
                 '"<endCursor>" (the same blockHeight on every page of a walk).'
             )
-        if not isinstance(first, IntValueNode) or not 0 < int(first.value) <= MAX_FIRST:
+        if first is None or not 0 < first <= MAX_FIRST:
             return (
                 f'"{name}" selects nodes/edges and needs a literal "first" between 1 and {MAX_FIRST}; '
                 "for a count use totalCount; for a sum, the function that sums; for more rows, page by keyset "
@@ -499,6 +538,71 @@ def _closed_schema_errors(document: DocumentNode, facts: "SchemaFacts") -> Optio
     visitor = _ClosedSchemaVisitor(type_info, facts)
     visit(document, TypeInfoVisitor(type_info, visitor))
     return visitor.error
+
+
+def _page_note(field: FieldNode, key: str, value: Any) -> Optional[str]:
+    """Why the rows of one field are a page of a longer list, or None. A lookup of one row (first or rowLimit 1, or a
+    lookup by key, which returns no list) is never a page."""
+    name = field.name.value
+    first, row_limit = _int_argument(field, "first"), _int_argument(field, "rowLimit")
+    if first == 1 or row_limit == 1:
+        return None
+    if isinstance(value, dict) and isinstance(value.get("nodes", value.get("edges")), list):
+        rows = len(value.get("nodes", value.get("edges")))
+        total = value.get("totalCount")
+        if isinstance(total, int):
+            more = total > rows
+        else:
+            more = (value.get("pageInfo") or {}).get("hasNextPage")
+            more = more if more is not None else first is not None and rows >= first
+        if more:
+            of = f" of {total}" if isinstance(total, int) else ""
+            return f"{key} returned {rows} rows{of}: one page of a longer list (the next page: after its endCursor)."
+        return None
+    if isinstance(value, list):
+        limit = min([n for n in (first, row_limit) if n is not None] + [MAX_LIST_ROWS])
+        if len(value) >= limit:
+            return f"{key} returned {len(value)} rows, the most this call returns: there may be more."
+        return None
+    if name.endswith("Json") and name[: -len("Json")] in ROW_FUNCTIONS:
+        data, _ = unwrap_range(value)
+        limit = row_limit or DEFAULT_ROW_LIMIT
+        if isinstance(data, list) and len(data) >= limit:
+            return (
+                f"{key} returned {len(data)} rows, its rowLimit: there may be more (the next page: the before... "
+                "arguments with the last row's keys)."
+            )
+    return None
+
+
+def _page_notes_in(
+    selection_set: SelectionSetNode, fragments: Dict[str, FragmentDefinitionNode], result: Any, notes: List[str]
+) -> None:
+    """The page notes of the fields of one selection set (through fragments, and through Query.query)."""
+    if not isinstance(result, dict):
+        return
+    for field, _ in _child_fields(selection_set, fragments):
+        key = field.alias.value if field.alias else field.name.value
+        value = result.get(key)
+        if field.name.value == "query" and field.selection_set is not None:
+            _page_notes_in(field.selection_set, fragments, value, notes)
+            continue
+        note = _page_note(field, key, value)
+        if note:
+            notes.append(note + " Say the answer is a part of the list, never all of it.")
+
+
+def page_notes(document: DocumentNode, result: Any) -> List[str]:
+    """What the answer must say about a list that came back as one page of a longer one: never all of it."""
+    fragments = {d.name.value: d for d in document.definitions if isinstance(d, FragmentDefinitionNode)}
+    notes: List[str] = []
+    try:
+        for definition in document.definitions:
+            if isinstance(definition, OperationDefinitionNode):
+                _page_notes_in(definition.selection_set, fragments, result, notes)
+    except (GraphQLError, RecursionError):
+        pass
+    return list(dict.fromkeys(notes))
 
 
 # The live schema, built from one introspection of the API (tools_introspection's client) and rebuilt once it is older
@@ -647,13 +751,13 @@ SCHEMA_CACHE_PATH = os.getenv("POCKET_NETWORK_SCHEMA_CACHE") or os.path.join(
 
 def _introspection() -> Tuple[Dict[str, Any], float]:
     """The pruned introspection and when it was taken (epoch seconds): from the disk cache while it is younger than the
-    TTL and of this PRUNE_VERSION, else from the API."""
+    TTL, of this PRUNE_VERSION and of this endpoint, else from the API."""
     try:
         written_at = os.path.getmtime(SCHEMA_CACHE_PATH)
         if time.time() - written_at < SCHEMA_TTL_SECONDS:
             with open(SCHEMA_CACHE_PATH) as cached:
                 content = json.load(cached)
-            if content.get("version") == PRUNE_VERSION:
+            if content.get("version") == PRUNE_VERSION and content.get("endpoint") == tools_introspection._ENDPOINT:
                 return content["introspection"], written_at
     except (OSError, ValueError, AttributeError, KeyError):
         pass
@@ -663,7 +767,9 @@ def _introspection() -> Tuple[Dict[str, Any], float]:
         os.makedirs(os.path.dirname(SCHEMA_CACHE_PATH), exist_ok=True)
         partial = f"{SCHEMA_CACHE_PATH}.{os.getpid()}.tmp"
         with open(partial, "w") as cache:
-            json.dump({"version": PRUNE_VERSION, "introspection": data}, cache)
+            json.dump(
+                {"version": PRUNE_VERSION, "endpoint": tools_introspection._ENDPOINT, "introspection": data}, cache
+            )
         os.replace(partial, SCHEMA_CACHE_PATH)
         written_at = os.path.getmtime(SCHEMA_CACHE_PATH)
     except OSError as e:

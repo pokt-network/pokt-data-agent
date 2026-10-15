@@ -4,7 +4,7 @@ import unittest
 from unittest import mock
 
 from src.agent import PocketNetworkAgent
-from src.graphql_client import final_error_reply, is_coverage_error, is_fixable_query_error
+from src.graphql_client import MAX_RESULT_CHARS, final_error_reply, is_coverage_error, is_fixable_query_error
 from src.query_sub_agents import SettlementRewardsAgent
 
 # Messages returned by https://data.pocket.network/ on 2026-10-05, as PocketNetworkAPIClient formats them.
@@ -110,6 +110,16 @@ class TestSubAgentRetries(unittest.TestCase):
 
 
 class TestMainAgentCoverage(unittest.TestCase):
+    def test_a_long_result_is_cut_before_the_formatter_and_said_so(self):
+        agent = PocketNetworkAgent.__new__(PocketNetworkAgent)
+        agent.llm = mock.MagicMock()
+        agent.llm.invoke.return_value = mock.MagicMock(content="answer")
+        state = {"user_query": "q", "query": "{ x }", "query_result": {"x": "a" * (MAX_RESULT_CHARS + 50)}}
+        agent._format_response(state)
+        prompt = agent.llm.invoke.call_args[0][0][1].content
+        self.assertIn(f"The result was cut to {MAX_RESULT_CHARS} of", prompt)
+        self.assertLess(len(prompt), MAX_RESULT_CHARS + 2000)
+
     def test_coverage_error_is_reported_as_not_covered(self):
         agent = PocketNetworkAgent.__new__(PocketNetworkAgent)
         agent.llm = mock.MagicMock()

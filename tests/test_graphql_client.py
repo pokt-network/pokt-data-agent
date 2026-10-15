@@ -3,8 +3,15 @@ import unittest
 from unittest import mock
 
 import requests
+from graphql import parse
 
-from src.graphql_client import DEFAULT_ROW_LIMIT, MAX_LIST_ROWS, MAX_RAW_ERROR_CHARS, PocketNetworkAPIClient, page_notes
+from src.graphql_client import MAX_RAW_ERROR_CHARS, PocketNetworkAPIClient
+from src.graphql_validator import DEFAULT_ROW_LIMIT, MAX_LIST_ROWS
+from src.graphql_validator import page_notes as notes_of
+
+
+def page_notes(query, result):
+    return notes_of(parse(query), result)
 
 
 def _response(status, text):
@@ -38,10 +45,6 @@ class TestClientErrors(unittest.TestCase):
         success, _, error = PocketNetworkAPIClient("http://api").execute_query("{ x }")
         self.assertFalse(success)
         self.assertEqual(error, "HTTP error: 502 - " + "x" * MAX_RAW_ERROR_CHARS)
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestPageNotes(unittest.TestCase):
@@ -85,8 +88,39 @@ class TestPageNotes(unittest.TestCase):
             len(page_notes('{ getActorLifecycleJson(kind: "supplier") }', {"getActorLifecycleJson": data})), 1
         )
 
+    def test_pages_under_the_query_wrapper_and_fragments(self):
+        rows = [{"supplierId": "p"}] * MAX_LIST_ROWS
+        for query, result in (
+            (
+                "{ query { query { getSupplierFleetList { supplierId } } } }",
+                {"query": {"query": {"getSupplierFleetList": rows}}},
+            ),
+            ("{ ...F } fragment F on Query { f: getSupplierFleetList { supplierId } }", {"f": rows}),
+            ("{ ... on Query { getSupplierFleetList { supplierId } } }", {"getSupplierFleetList": rows}),
+        ):
+            with self.subTest(query=query):
+                self.assertEqual(len(page_notes(query, result)), 1)
+
+    def test_total_count_decides_when_present(self):
+        # hasNextPage may be true while totalCount says every row is here (and the reverse): totalCount decides
+        query = "{ s: suppliers(first: 5) { totalCount pageInfo { hasNextPage } nodes { id } } }"
+        self.assertEqual(
+            page_notes(query, {"s": {"totalCount": 5, "pageInfo": {"hasNextPage": True}, "nodes": [{}] * 5}}), []
+        )
+        self.assertEqual(
+            len(page_notes(query, {"s": {"totalCount": 9, "pageInfo": {"hasNextPage": False}, "nodes": [{}] * 5}})), 1
+        )
+
     def test_complete_answers_have_no_page_note(self):
         for query, result in (
+            # lookups of one row: by key, and first or rowLimit 1
+            ('{ supplier(id: "p") { id } }', {"supplier": {"id": "p"}}),
+            ('{ t: transactions(filter: {id: {equalTo: "x"}}, first: 1) { nodes { id } } }', {"t": {"nodes": [{}]}}),
+            (
+                '{ getRelayMiningDifficultyJson(services: ["eth"], rowLimit: 1) }',
+                {"getRelayMiningDifficultyJson": {"data": [{}], "range": {}}},
+            ),
+            ("{ getStakedSuppliersList(rowLimit: 1) { supplierId } }", {"getStakedSuppliersList": [{}]}),
             (
                 "{ s: suppliers(first: 5) { totalCount pageInfo { hasNextPage } nodes { id } } }",
                 {"s": {"totalCount": 3, "pageInfo": {"hasNextPage": False}, "nodes": [{}] * 3}},
@@ -113,3 +147,7 @@ class TestPageNotes(unittest.TestCase):
         )
         self.assertTrue(success)
         self.assertIn("Page: getSupplierFleetList returned 1000 rows", notes)
+
+
+if __name__ == "__main__":
+    unittest.main()
