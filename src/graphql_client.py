@@ -328,8 +328,9 @@ ROW_FUNCTIONS = frozenset(
     }
 )
 DEFAULT_ROW_LIMIT = 100
-# The most rows one call of a function list returns without "first" or "rowLimit": the API's query limit (both
-# endpoints, 2026-10-14). A call that returns that many may have more.
+# The most rows one call of a function list returns, whatever "first" or "rowLimit" asks: the API's query limit (both
+# endpoints, 2026-10-14), which cuts the list with no signal (getSupplierFleetList Staked: 1000 of 4,558 with
+# first: 2000). A call that returns that many may have more.
 MAX_LIST_ROWS = 1000
 
 
@@ -351,8 +352,7 @@ def _page_note(field: FieldNode, key: str, value: Any) -> str | None:
             return f"{key} returned {rows} rows{of}: one page of a longer list (the next page: after its endCursor)."
         return None
     if isinstance(value, list):
-        limits = [n for n in (first, row_limit) if n is not None]
-        limit = min(limits) if limits else MAX_LIST_ROWS
+        limit = min([n for n in (first, row_limit) if n is not None] + [MAX_LIST_ROWS])
         if len(value) >= limit:
             return f"{key} returned {len(value)} rows, the most this call returns: there may be more."
         return None
@@ -902,8 +902,9 @@ GRAPHQL_REGISTRY = {
             "# Staked suppliers with an endpoint on some domains: count and total stake\n"
             'query { getSupplierFleetList(domains: ["example.com"], stakeStatuses: ["Staked"], bySupplier: false) '
             "{ supplierCount stakeUpokt } }",
-            "# The suppliers of an owner, largest stake first\n"
-            'query { getSupplierFleetList(owners: ["pokt1..."]) { supplierId stakeStatus stakeUpokt serviceCount } }',
+            "# The suppliers of an owner, largest stake first, one page (next: afterStakeUpokt and afterSupplierId)\n"
+            'query { getSupplierFleetList(owners: ["pokt1..."], rowLimit: 1000) { supplierId stakeStatus stakeUpokt '
+            "serviceCount } }",
             "# Staked suppliers of a service with a stake below 100k POKT, with their domains for that service, one page\n"
             'query { getSupplierFleetList(services: ["eth"], stakeStatuses: ["Staked"], maxStakeUpokt: "100000000000", '
             "rowLimit: 100) { supplierId stakeUpokt serviceDomains } }",

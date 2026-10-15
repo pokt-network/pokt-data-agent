@@ -55,6 +55,12 @@ class TestPageNotes(unittest.TestCase):
         self.assertIn("getSupplierFleetList returned 1000 rows, the most this call returns", notes[0])
         self.assertIn("never all of it", notes[0])
 
+    def test_a_first_above_the_cap_does_not_hide_the_cut(self):
+        # the API cuts a function list at 1000 rows whatever first asks, with no signal
+        rows = [{"supplierId": "p"}] * MAX_LIST_ROWS
+        query = '{ getSupplierFleetList(stakeStatuses: ["Staked"], first: 2000) { supplierId } }'
+        self.assertEqual(len(page_notes(query, {"getSupplierFleetList": rows})), 1)
+
     def test_entity_list_pages(self):
         for query, value in (
             (
