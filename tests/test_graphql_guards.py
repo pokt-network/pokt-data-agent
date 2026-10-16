@@ -102,6 +102,23 @@ class TestQueryGuards(unittest.TestCase):
             with self.subTest(query=query):
                 self.assertRegex(guard(query), r"Use (getIncome|moneyCoverage|getSupplyFlows|getParamHistory)Json,")
 
+    def test_the_slow_money_functions_with_a_catalog_replacement_are_refused_with_it(self):
+        for name, args, replacement in (
+            (
+                "servicesPerformanceBetweenTimes",
+                '(endCurrent: "2026-10-09T00:00:00Z", startCurrentAndEndPrevious: "2026-10-02T00:00:00Z", '
+                'startPrevious: "2026-09-25T00:00:00Z")',
+                "getServiceSummaryList",
+            ),
+            (
+                "getDataByDelegatorAddressesAndTimes",
+                '(addresses: ["pokt1x"], startTs: "2026-10-01T00:00:00Z", endTs: "2026-10-02T00:00:00Z")',
+                "operators",
+            ),
+        ):
+            with self.subTest(name=name):
+                self.assertIn(replacement, guard(f"{{ x: {name}{args} }}"))
+
     def test_the_orphan_mint_v2_points_to_the_legacy_mint(self):
         error = guard('{ getMintBreakdownBetweenDatesV2(startDate: "2026-10-01T00:00:00Z") }')
         self.assertIn("use legacyMintBreakdownBetweenDates (same arguments", error)

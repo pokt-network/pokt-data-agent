@@ -148,6 +148,13 @@ HIDDEN_FIELDS = {
     "getSupplierStatsByDomains": 'getSupplierFleetList with domains, stakeStatuses: ["Staked"] and bySupplier: false',
     "relayByBlockAndServices": "getServiceUsageJson",
     "relays": "nothing: the table is empty",
+    "servicesPerformanceBetweenTimes": "getServiceUsageJson with topBySettled: 200 for the window and the one before it, "
+    "and getServiceSummaryList for the staked suppliers and applications, in one query",
+    "getClaimProofsDataByDelegatorsAndTime": "getSupplierEarningsJson, getSupplierProofsJson and getSupplierPenaltiesJson with operators",
+    "getDataByDelegatorAddressesAndTimes": "getSupplierEarningsJson, getSupplierProofsJson and getSupplierPenaltiesJson with operators "
+    "(kind slashed for the slashes), in one query",
+    "getDataByDelegatorAddressesAndBlocks": "getSupplierEarningsJson, getSupplierProofsJson and getSupplierPenaltiesJson with operators "
+    "and the times of getHeightAt",
 }
 EVENT_PREFIXES = ("event", "msg")
 EVENT_HINT = "the event and message tables are hidden: use the function that answers the question (introspect Query)"

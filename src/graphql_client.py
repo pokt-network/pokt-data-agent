@@ -565,18 +565,6 @@ GRAPHQL_REGISTRY = {
             'truncInterval: "day") }',
         ],
     ),
-    "getClaimProofsDataByDelegatorsAndTime": QueryFieldInfo(
-        name="getClaimProofsDataByDelegatorsAndTime",
-        description='Claims created, claims settled (proofs) and claims expired, in relays, compute units and upokt, of the suppliers whose current rev_share includes the given addresses, in the given time with granularity. It does NOT return the rewards the addresses received: use getIncomeJson for that. The "delegators" in the name are supplier rev_share addresses: addresses configured in a supplier\'s rev_share that receive a share of its reward tokens (NOT validator/consensus delegators, nor owners of the stake).',
-        fields_notes={
-            "addresses": 'A vector of supplier rev_share addresses to query: ["pokt1....", "pokt1...."]. These are the addresses receiving reward tokens from suppliers.',
-        },
-        examples=[
-            "# Claims vs proofs time-series for specific supplier rev_share addresses\n"
-            'query { getClaimProofsDataByDelegatorsAndTime(addresses: ["pokt1..."], '
-            'startTs: "2026-06-01T00:00:00Z", endTs: "2026-06-11T00:00:00Z", truncInterval: "day") }',
-        ],
-    ),
     "getRewardsByDomainsAndTimeGroupByService": QueryFieldInfo(
         name="getRewardsByDomainsAndTimeGroupByService",
         description="Returns the total number of suppliers, rewards (CUs, upokt, relays) stake for a given domain name in each of their staked services.",
@@ -584,24 +572,6 @@ GRAPHQL_REGISTRY = {
             "domains": 'A vector of domains to query: ["foo.bar", "example.com", ...]. extracted normally from the staked endpoint data of a supplier.',
             "endTs/startTs": "These only respect DAY granularity, it will ignore any hours-min-sec passed, it is a DATE field, not a DATETIME",
         },
-    ),
-    "getDataByDelegatorAddressesAndTimes": QueryFieldInfo(
-        name="getDataByDelegatorAddressesAndTimes",
-        description="Returns the total rewards, relays (claims and proofs) and slashes done by a delegator of a supplier node. A \"delegator\" here is a supplier rev_share address: an address listed in the supplier's service rev_share configuration that receives a share of that service from the supplier's reward tokens. Observed period in timestamps",
-        examples=[
-            "# Operator rollup (rewards, claims/proofs, slashes) for supplier rev_share addresses in a time window\n"
-            'query { getDataByDelegatorAddressesAndTimes(addresses: ["pokt1..."], '
-            'startTs: "2026-06-01T00:00:00Z", endTs: "2026-06-11T00:00:00Z") }',
-        ],
-    ),
-    "getDataByDelegatorAddressesAndBlocks": QueryFieldInfo(
-        name="getDataByDelegatorAddressesAndBlocks",
-        description="Returns the total rewards, relays (claims and proofs) and slashes done by a delegator of a supplier node. A \"delegator\" here is a supplier rev_share address: an address listed in the supplier's service rev_share configuration that receives a share of that service from the supplier's reward tokens. Observed period in block numbers.",
-        examples=[
-            "# Operator rollup (rewards, claims/proofs, slashes) for supplier rev_share addresses in a block range\n"
-            'query { getDataByDelegatorAddressesAndBlocks(addresses: ["pokt1..."], '
-            'startHeight: "780000", endHeight: "790000") }',
-        ],
     ),
     "getOverservicedByAddressesAndTime": QueryFieldInfo(
         name="getOverservicedByAddressesAndTime",
@@ -754,20 +724,6 @@ GRAPHQL_REGISTRY = {
         examples=[
             "# One block snapshot per day (daily evolution of staked actors and supply)\n"
             'query { getLatestBlocksByDay(startDate: "2026-06-01T00:00:00Z", endDate: "2026-06-11T00:00:00Z") }',
-        ],
-    ),
-    "servicesPerformanceBetweenTimes": QueryFieldInfo(
-        name="servicesPerformanceBetweenTimes",
-        description='Compares per-service performance between a current and a previous time window in a single call: relays, computed units, rewards and the relative change. Use it for "which services grew or declined" style questions.',
-        fields_notes={
-            "endCurrent": "End of the current window (timestamp).",
-            "startCurrentAndEndPrevious": "Boundary timestamp: end of the previous window and start of the current one.",
-            "startPrevious": "Start of the previous window (timestamp).",
-        },
-        examples=[
-            "# Per-service comparison: last 24h vs the previous 24h\n"
-            'query { servicesPerformanceBetweenTimes(endCurrent: "2026-06-11T00:00:00Z", '
-            'startCurrentAndEndPrevious: "2026-06-10T00:00:00Z", startPrevious: "2026-06-09T00:00:00Z") }',
         ],
     ),
     "getSuppliersStakedAndBlocksByPointJson": QueryFieldInfo(
@@ -1183,8 +1139,12 @@ GRAPHQL_REGISTRY = {
             "services": "Up to 200 services: only the claims of those services.",
             "byService/byApplication/bySupplier": "Split by service, by application, or per supplier (bySupplier defaults to true when suppliers are given). With byApplication, gateway_ids = the application's gateways now.",
             "claimed_upokt": "upokt the suppliers claimed; settled_upokt is what was paid after overservicing.",
+            "operators": "Addresses that share revenue with suppliers (delegators): the Staked suppliers whose service configs list them in rev_share now. One address per call for one row per address.",
         },
         examples=[
+            "# The earnings of the suppliers a delegator address shares revenue with, in a week\n"
+            'query { getSupplierEarningsJson(operators: ["pokt1..."], rangeStart: "2026-09-28T00:00:00Z", '
+            'rangeEnd: "2026-10-05T00:00:00Z", bySupplier: false) }',
             "# A supplier's earnings per service in a week\n"
             'query { getSupplierEarningsJson(suppliers: ["pokt1..."], rangeStart: "2026-09-28T00:00:00Z", '
             'rangeEnd: "2026-10-05T00:00:00Z", byService: true, bySupplier: false) }',
@@ -1203,6 +1163,7 @@ GRAPHQL_REGISTRY = {
             **CATALOG_NOTES,
             "suppliers": "Supplier addresses, up to 200; omit for every supplier.",
             "owners": "Owner addresses in place of suppliers.",
+            "operators": "Addresses that share revenue with suppliers (delegators), as in getSupplierEarningsJson.",
         },
         examples=[
             "# Network-wide proofs per day\n"
@@ -1217,6 +1178,7 @@ GRAPHQL_REGISTRY = {
             **CATALOG_NOTES,
             "suppliers": "Supplier addresses, up to 200.",
             "owners": "Owner addresses in place of suppliers.",
+            "operators": "Addresses that share revenue with suppliers (delegators), as in getSupplierEarningsJson; kind slashed holds their slashes.",
         },
         examples=[
             "# Expired claims, discards and slashes of a supplier, per service\n"
@@ -1274,6 +1236,9 @@ GRAPHQL_REGISTRY = {
             "settled_upokt": "upokt paid for the service after overservicing; claimed_upokt is what suppliers claimed.",
         },
         examples=[
+            "# Every service in two consecutive weeks, to compare them (growth or decline): the same call twice in one query\n"
+            'query { current: getServiceUsageJson(topBySettled: 200, rangeStart: "2026-10-05T00:00:00Z", rangeEnd: "2026-10-12T00:00:00Z") '
+            'previous: getServiceUsageJson(topBySettled: 200, rangeStart: "2026-09-28T00:00:00Z", rangeEnd: "2026-10-05T00:00:00Z") }',
             "# Top 20 services by settled value yesterday\n"
             'query { getServiceUsageJson(rangeStart: "2026-10-04T00:00:00Z", rangeEnd: "2026-10-05T00:00:00Z", '
             "topBySettled: 20) }",

@@ -772,7 +772,6 @@ class SettlementRewardsAgent(QueryBuilderSubAgent):
     graphql_methods = [
         "getClaimsJson",
         "getClaimProofsDataByTime",
-        "getClaimProofsDataByDelegatorsAndTime",
         "getIncomeJson",
         "legacyRewardsByAddressesAndTimeGroupByService",
         "legacyRewardsBySuppliersAndTimeGroupByAddressAndDate",
@@ -843,7 +842,6 @@ class ServiceEconomicsAgent(QueryBuilderSubAgent):
         "getRewardsByDomainsAndTimeGroupByService",
         "getSupplierFleetList",
         "getSupplierEarningsJson",
-        "servicesPerformanceBetweenTimes",
         "getSuppliersStakedAndBlocksByPointJson",
         "applicationServices",
     ]
@@ -864,7 +862,7 @@ Your queries should prefer get... methods that summarize service performance or 
 Always apply a filter when possible, such as service ID, domain list, or date range, because service-level analysis is large and time-dependent.
 
 If the user asks which services are most active, most profitable, or have the most supplier support, use grouped and time-truncated service analytics; getServiceUsageJson with topBySettled ranks services by settled value.
-If the user asks to compare service performance between two periods (growth/decline), prefer servicesPerformanceBetweenTimes, which compares a current and a previous window in one call.
+If the user asks to compare service performance between two periods (growth/decline), use getServiceUsageJson with topBySettled: 200 for the current window and for the previous one (two aliased calls in one query), and getServiceSummaryList for the staked suppliers and applications; change = (current - previous) / previous of estimated_compute_units.
 If the user asks about relay-mining difficulty, interpret it as the mechanism that affects the relationship between claimed computed units and estimated computed units.
 If the user asks how many suppliers or applications a service has, or its current difficulty, use getServiceSummaryList; for the suppliers (count, stake) on some domains, getSupplierFleetList with domains.
 If the user provides a service identifier or service name, filter by that service whenever possible.
@@ -947,8 +945,9 @@ class StakingParticipantStateAgent(QueryBuilderSubAgent):
         "getGatewayFleetList",
         "getGatewayDelegationsList",
         "getActorLifecycleJson",
-        "getDataByDelegatorAddressesAndTimes",
-        "getDataByDelegatorAddressesAndBlocks",
+        "getSupplierEarningsJson",
+        "getSupplierProofsJson",
+        "getSupplierPenaltiesJson",
         "getOverservicedByAddressesAndTime",
         "getValidatorRewardsJson",
         "getDelegatorIncomeJson",
@@ -980,7 +979,7 @@ Always apply a filter when possible, such as address, address list, time range, 
 If the user asks about application health, gateway status, or supplier lifecycle, combine the stake history (getActorLifecycleJson) with overservicing (getOverservicedByAddressesAndTime).
 If the user asks for counts or total stake of applications or suppliers, use getApplicationFleetList, getSupplierFleetList or getGatewayFleetList (byApplication / bySupplier / byGateway false for one total); for validators, the newest blocks row (stakedValidators, stakedValidatorsTokens); a count alone is the totalCount of the entity table with a stakeStatus filter. Do not accumulate events.
 If the user asks which suppliers serve a service (or which services a supplier is staked in), use supplierServiceConfigs filtered by serviceId or supplierId.
-If the user asks about delegators of a supplier node, treat them as the supplier's rev_share addresses: the addresses configured in the supplier rev_share that receive a share of its reward tokens (for a given service configured). Use the delegator-oriented summaries for them, and do not confuse them with validator (consensus) delegators.
+If the user asks about delegators of a supplier node, treat them as the supplier's rev_share addresses: the addresses configured in the supplier rev_share that receive a share of its reward tokens (for a given service configured). Use getSupplierEarningsJson, getSupplierProofsJson and getSupplierPenaltiesJson with operators: [that address] (one query, bySupplier: false) for what the suppliers they share revenue with earned, proved and lost, and do not confuse them with validator (consensus) delegators.
 If the user asks about delegators of a validator (consensus delegations), use the RPC methods: get_validator_delegations for who delegates to a validator, and get_delegator_delegations for which validators an account delegates to.
 If the user asks what a validator earned (commission, self-delegation, APR inputs) use getValidatorRewardsJson; what a validator delegator received, getDelegatorIncomeJson.
 If the user asks for node state, disambiguate between supplier, gateway, and application based on context.
