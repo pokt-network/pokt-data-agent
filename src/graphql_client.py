@@ -1237,7 +1237,7 @@ GRAPHQL_REGISTRY = {
             "rowOffset": "Services to skip before the page; needs rowLimit.",
             "orderBy": "With rowLimit: estimated_compute_units (default), estimated_relays, relays, compute_units, settled_upokt, claimed_upokt, service_id, name, staked_suppliers or change (needs compareStart). orderDir asc or desc (default desc).",
             "searchText": "With rowLimit: only the services whose id or name contains the text (case-insensitive). Not named search.",
-            "compareStart": "Start of the previous window (without bucket); compareEnd (default rangeStart) is its end. Adds previous_estimated_compute_units and change = (estimated_compute_units - previous) / previous (1 when previous is 0).",
+            "compareStart": 'Start of the previous window (without bucket); compareEnd (default rangeStart) is its end. Adds previous_estimated_compute_units and change = (estimated_compute_units - previous) / previous (1 when previous is 0). Both are null, not 0, when the money tables do not cover the whole compare window: report "no previous data".',
             "withDetails": "true adds name, staked_suppliers and staked_applications (the Staked ones configured for the service now); null without it. Costs 100 to 400 ms: pass it only when you need those columns.",
             "settled_upokt": "upokt paid for the service after overservicing; claimed_upokt is what suppliers claimed.",
         },
