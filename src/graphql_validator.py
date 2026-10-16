@@ -374,9 +374,10 @@ def _check_field(
             # pocketdex names the ...List variants too, which the guards refuse
             refused = sorted(f for f in CATALOG_FUNCTIONS | ROW_FUNCTIONS if f"{f}List" in reason)
             return f'"{name}" is leaving the API: {reason}' + "".join(f" Use {f}Json, not {f}List." for f in refused)
-        return f'"{name}" is leaving the API: ' + (
-            f"use {HIDDEN_FIELDS[name]}." if name in HIDDEN_FIELDS else f"{EVENT_HINT}."
-        )
+        hint = HIDDEN_FIELDS.get(name)
+        if hint is None:
+            return f'"{name}" is leaving the API: {EVENT_HINT}.'
+        return f'"{name}" is leaving the API: ' + (hint if hint.startswith("nothing") else f"use {hint}") + "."
     # With the live schema loaded, relations and relation filters are found by type (_closed_schema_errors); these
     # name patterns are the fallback before it loads.
     operators = None if facts else FILTER_OPERATORS
@@ -773,9 +774,9 @@ def _introspection() -> Tuple[Dict[str, Any], float]:
         pass
     data = prune_introspection(tools_introspection._introspect(get_introspection_query(descriptions=False)))
     written_at = time.time()
+    partial = f"{SCHEMA_CACHE_PATH}.{os.getpid()}.tmp"
     try:
         os.makedirs(os.path.dirname(SCHEMA_CACHE_PATH), exist_ok=True)
-        partial = f"{SCHEMA_CACHE_PATH}.{os.getpid()}.tmp"
         with open(partial, "w") as cache:
             json.dump(
                 {"version": PRUNE_VERSION, "endpoint": tools_introspection._ENDPOINT, "introspection": data}, cache
@@ -784,6 +785,10 @@ def _introspection() -> Tuple[Dict[str, Any], float]:
         written_at = os.path.getmtime(SCHEMA_CACHE_PATH)
     except OSError as e:
         logger.warning("Could not cache the GraphQL schema on disk: %s", e)
+        try:
+            os.remove(partial)
+        except OSError:
+            pass
     return data, written_at
 
 
