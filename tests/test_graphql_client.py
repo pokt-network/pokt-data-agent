@@ -111,6 +111,17 @@ class TestPageNotes(unittest.TestCase):
             len(page_notes(query, {"s": {"totalCount": 9, "pageInfo": {"hasNextPage": False}, "nodes": [{}] * 5}})), 1
         )
 
+    def test_a_page_after_the_first_is_decided_by_has_next_page(self):
+        # totalCount counts the whole list: the last page of a walk is below it and is not a longer list's page
+        query = '{ s: suppliers(first: 100, after: "c") { totalCount pageInfo { hasNextPage } nodes { id } } }'
+        self.assertEqual(
+            page_notes(query, {"s": {"totalCount": 250, "pageInfo": {"hasNextPage": False}, "nodes": [{}] * 50}}), []
+        )
+        self.assertEqual(
+            len(page_notes(query, {"s": {"totalCount": 250, "pageInfo": {"hasNextPage": True}, "nodes": [{}] * 100}})),
+            1,
+        )
+
     def test_complete_answers_have_no_page_note(self):
         for query, result in (
             # lookups of one row: by key, and first or rowLimit 1

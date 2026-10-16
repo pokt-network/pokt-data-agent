@@ -550,7 +550,9 @@ def _page_note(field: FieldNode, key: str, value: Any) -> Optional[str]:
         return None
     if isinstance(value, dict) and isinstance(value.get("nodes", value.get("edges")), list):
         rows = len(value.get("nodes", value.get("edges")))
-        total = value.get("totalCount")
+        # totalCount is the size of the whole list: on a page after the first, rows are below it by design, so there
+        # hasNextPage says whether the walk goes on
+        total = value.get("totalCount") if _argument(field, "after") is None else None
         if isinstance(total, int):
             more = total > rows
         else:
