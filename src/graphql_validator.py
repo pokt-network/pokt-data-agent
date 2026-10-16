@@ -148,8 +148,8 @@ HIDDEN_FIELDS = {
     "getSupplierStatsByDomains": 'getSupplierFleetList with domains, stakeStatuses: ["Staked"] and bySupplier: false',
     "relayByBlockAndServices": "getServiceUsageJson",
     "relays": "nothing: the table is empty",
-    "servicesPerformanceBetweenTimes": "getServiceUsageJson with topBySettled: 200 for the window and the one before it, "
-    "and getServiceSummaryList for the staked suppliers and applications, in one query",
+    "servicesPerformanceBetweenTimes": "getServiceUsageJson with rangeStart/rangeEnd the current window, compareStart the start of the previous one, "
+    "withDetails: true and rowLimit: 200 paged with rowOffset until total_services",
     "getClaimProofsDataByDelegatorsAndTime": "getSupplierEarningsJson, getSupplierProofsJson and getSupplierPenaltiesJson with operators",
     "getDataByDelegatorAddressesAndTimes": "getSupplierEarningsJson, getSupplierProofsJson and getSupplierPenaltiesJson with operators "
     "(kind slashed for the slashes), in one query",

@@ -1233,12 +1233,18 @@ GRAPHQL_REGISTRY = {
             **CATALOG_NOTES,
             "services": 'Service ids, e.g. ["eth", "base"].',
             "topBySettled": "1 to 200: the N services that settled the most upokt (rank_by_settled). Pass services or topBySettled (or both).",
+            "rowLimit": "A page of services, 1 to 200 (1 to 20 with bucket), ranked by orderBy among the services with usage in the range; exclusive with topBySettled. Every row carries total_services, the number of ranked services: page with rowOffset until you have them all.",
+            "rowOffset": "Services to skip before the page; needs rowLimit.",
+            "orderBy": "With rowLimit: estimated_compute_units (default), estimated_relays, relays, compute_units, settled_upokt, claimed_upokt, service_id, name, staked_suppliers or change (needs compareStart). orderDir asc or desc (default desc).",
+            "searchText": "With rowLimit: only the services whose id or name contains the text (case-insensitive). Not named search.",
+            "compareStart": "Start of the previous window (without bucket); compareEnd (default rangeStart) is its end. Adds previous_estimated_compute_units and change = (estimated_compute_units - previous) / previous (1 when previous is 0).",
+            "withDetails": "true adds name, staked_suppliers and staked_applications (the Staked ones configured for the service now); null without it. Costs 100 to 400 ms: pass it only when you need those columns.",
             "settled_upokt": "upokt paid for the service after overservicing; claimed_upokt is what suppliers claimed.",
         },
         examples=[
-            "# Every service in two consecutive weeks, to compare them (growth or decline): the same call twice in one query\n"
-            'query { current: getServiceUsageJson(topBySettled: 200, rangeStart: "2026-10-05T00:00:00Z", rangeEnd: "2026-10-12T00:00:00Z") '
-            'previous: getServiceUsageJson(topBySettled: 200, rangeStart: "2026-09-28T00:00:00Z", rangeEnd: "2026-10-05T00:00:00Z") }',
+            "# Every service in a week against the week before (growth or decline), 200 per page; the next page: rowOffset 200\n"
+            'query { getServiceUsageJson(rowLimit: 200, rowOffset: 0, compareStart: "2026-09-28T00:00:00Z", withDetails: true, '
+            'rangeStart: "2026-10-05T00:00:00Z", rangeEnd: "2026-10-12T00:00:00Z") }',
             "# Top 20 services by settled value yesterday\n"
             'query { getServiceUsageJson(rangeStart: "2026-10-04T00:00:00Z", rangeEnd: "2026-10-05T00:00:00Z", '
             "topBySettled: 20) }",

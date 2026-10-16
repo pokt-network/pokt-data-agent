@@ -108,7 +108,7 @@ class TestQueryGuards(unittest.TestCase):
                 "servicesPerformanceBetweenTimes",
                 '(endCurrent: "2026-10-09T00:00:00Z", startCurrentAndEndPrevious: "2026-10-02T00:00:00Z", '
                 'startPrevious: "2026-09-25T00:00:00Z")',
-                "getServiceSummaryList",
+                "compareStart",
             ),
             (
                 "getDataByDelegatorAddressesAndTimes",
