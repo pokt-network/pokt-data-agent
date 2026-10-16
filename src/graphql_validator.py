@@ -107,6 +107,7 @@ ROW_FUNCTIONS = frozenset(
         "getRelayMiningDifficulty",
         "getCreatedClaims",
         "getMorseClaims",
+        "getNativeTransfers",
     }
 )
 DEFAULT_ROW_LIMIT = 100

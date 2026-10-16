@@ -44,6 +44,7 @@ POCKETDEX_CATALOG_FUNCTIONS = [
     "get_relay_mining_difficulty",
     "get_created_claims",
     "get_morse_claims",
+    "get_native_transfers",
 ]
 
 

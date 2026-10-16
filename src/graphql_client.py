@@ -471,7 +471,7 @@ GRAPHQL_REGISTRY = {
             "computeUnitsPerRelay": "Numeber of Compute Units to be consumed per call to this service (known normaly by CUPR)",
             "ownerId": "Address of the account that owns this service (the one that can cahnge the CUPR value and receives owner rewards).",
             "suppliers/applications": "How many suppliers and applications a service has: getServiceSummaryList. Which ones: supplierServiceConfigs or applicationServices filtered by serviceId.",
-            "difficulty": "The current relay mining difficulty of a service: getServiceSummaryList (it lists only the services with a supplier or an application now; for another, the newest row of getRelayMiningDifficultyJson); its history: getRelayMiningDifficultyJson.",
+            "difficulty": "The current relay mining difficulty of a service: getServiceSummaryList (a row for every live service, zeros when it has no supplier or application now); its history: getRelayMiningDifficultyJson.",
         },
         examples=[
             "# Service list, with the suppliers, applications and current difficulty of every service in the same request\n"
@@ -637,7 +637,7 @@ GRAPHQL_REGISTRY = {
     ),
     "nativeTransfers": QueryFieldInfo(
         name="nativeTransfers",
-        description="Tracks native token transfers (MsgSend) between accounts. Filter by senderId and/or recipientId to get the transfer history of a wallet (who sent tokens to whom). Reward payouts from network modules are not transfers: use getIncomeJson for them.",
+        description="Tracks native token transfers (MsgSend) between accounts. Filter by senderId and/or recipientId to get the transfer history of a wallet (who sent tokens to whom); with the block time and the transaction's fees and code in the same call: getNativeTransfersJson. Reward payouts from network modules are not transfers: use getIncomeJson for them.",
         fields_notes={
             "senderId": 'The address sending the tokens (must start with "pokt1").',
             "recipientId": 'The address receiving the tokens (must start with "pokt1").',
@@ -650,6 +650,25 @@ GRAPHQL_REGISTRY = {
             "query { nativeTransfers(first: 20, orderBy: BLOCK_ID_DESC, filter: {or: ["
             '{senderId: {equalTo: "pokt1..."}}, {recipientId: {equalTo: "pokt1..."}}]}) '
             "{ totalCount nodes { id senderId recipientId amounts denom blockId transactionId } } }",
+        ],
+    ),
+    "getNativeTransfersJson": QueryFieldInfo(
+        name="getNativeTransfersJson",
+        description="Native token transfers (MsgSend) of up to 200 addresses, newest first, each with its block time and its transaction's code, codespace, fees, signer and memo, in one call. direction: sent (the sender is one of addresses), received (the recipient is) or omitted for both. Optional time range. Use it instead of nativeTransfers when the answer needs the time, fees or code of the transaction.",
+        fields_notes={
+            "addresses": "Required: 1 to 200 pokt1... addresses.",
+            **ROW_NOTES,
+            "before...": "beforeHeight and beforeId: the height and id of the last row of the previous page; pass both or neither.",
+        },
+        examples=[
+            "# Transfers a wallet sent or received, with their fees, code and time\n"
+            'query { getNativeTransfersJson(addresses: ["pokt1..."], rowLimit: 20) }',
+            "# Only what a wallet received in a time range\n"
+            'query { getNativeTransfersJson(addresses: ["pokt1..."], direction: "received", '
+            'rangeStart: "2026-10-01T00:00:00Z", rangeEnd: "2026-10-08T00:00:00Z") }',
+            "# Next page: the height and id of the last row of the previous page\n"
+            'query { getNativeTransfersJson(addresses: ["pokt1..."], rowLimit: 20, beforeHeight: "964073", '
+            'beforeId: "964073-finalize_block-17563") }',
         ],
     ),
     "accounts": QueryFieldInfo(
@@ -981,7 +1000,7 @@ GRAPHQL_REGISTRY = {
     ),
     "getServiceSummaryList": QueryFieldInfo(
         name="getServiceSummaryList",
-        description="Services now: per service, the suppliers configured for it (suppliers) and how many of them are Staked (stakedSuppliers), the applications staked for it (applications) and how many are Staked (stakedApplications), and its current relay mining difficulty from its newest update (numRelaysEma, targetHashHex, difficultyUpdatedHeight; null when it never had one). services = those (up to 200); omitted = every service with a supplier or an application. owners (up to 200) keeps the services those addresses own now.",
+        description="Services now: per service, the suppliers configured for it (suppliers) and how many of them are Staked (stakedSuppliers), the applications staked for it (applications) and how many are Staked (stakedApplications), and its current relay mining difficulty from its newest update (numRelaysEma, targetHashHex, difficultyUpdatedHeight; null when it never had one). services = those (up to 200); omitted = every live service (zeros when it has no supplier or application now). owners (up to 200) keeps the services those addresses own now.",
         fields_notes=NOW_NOTES,
         examples=[
             "# Suppliers, applications and current difficulty per service\n"

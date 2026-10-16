@@ -1003,6 +1003,7 @@ class AccountStateAgent(QueryBuilderSubAgent):
         "balances",
         "accounts",
         "nativeTransfers",
+        "getNativeTransfersJson",
         "morseClaimableAccounts",
         "getMorseClaimSummaryList",
         "getHeightAt",
@@ -1022,7 +1023,7 @@ class AccountStateAgent(QueryBuilderSubAgent):
 You specialize in querying the token balance and migration state of plain user accounts — addresses that are not staked as suppliers, applications, or gateways.
 
 If the user provides an address, it is a bech32 pokt1… address for Shannon queries, or a hex address for Morse queries.
-If the user asks where a wallet sent or received tokens, use nativeTransfers filtered by senderId and/or recipientId.
+If the user asks where a wallet sent or received tokens, use getNativeTransfersJson (it carries the block time and the transaction's fees and code); use nativeTransfers filtered by senderId and/or recipientId only for plain ids.
 If the user asks how many accounts were active since a date, use getActiveAccountsList.
 If the user asks about "claiming" or "migration" in the context of a specific address, use the RPC method get_morse_claimable_account; for the accounts one by one use the GraphQL morseClaimableAccounts, and for migration totals (claimed vs unclaimed) getMorseClaimSummaryList.
 
@@ -1044,6 +1045,7 @@ class ChainActivityAgent(QueryBuilderSubAgent):
     graphql_methods = [
         "transactions",
         "nativeTransfers",
+        "getNativeTransfersJson",
         "blocks",
         "getBlockStatsJson",
         "accounts",
@@ -1067,13 +1069,13 @@ Always apply a filter when possible, such as a transaction hash, signer address,
 If the user provides a 64-character hex string, treat it as a transaction hash (the transaction "id") or a block hash.
 If the user asks for the transaction history of an address, filter transactions by signerAddress and order by BLOCK_ID_DESC.
 If the user asks how many transactions succeeded or failed in a time window, use getBlockStatsJson.
-If the user asks where a wallet sent or received tokens, use nativeTransfers filtered by senderId and/or recipientId.
+If the user asks where a wallet sent or received tokens, use getNativeTransfersJson (it carries the block time and the transaction's fees and code); use nativeTransfers filtered by senderId and/or recipientId only for plain ids.
 If the user asks about validator uptime, combine getProducedBlocksByValidator and getMissingValidatorBlocks from a starting block id; note their validatorAddress argument is the hex consensus address, not the poktvaloper... one.
 
 The user might use the following expressions:
 - "tx"/"transaction hash": the transaction id, a 64-character hex string.
 - "block number"/"height": the id of a block, which is numeric.
-- "transfer": a native send between two accounts (nativeTransfers), not a reward payout.
+- "transfer": a native send between two accounts (getNativeTransfersJson, nativeTransfers), not a reward payout.
 
 A transaction "code" of 0 means success; any other value means the transaction failed.
 """
