@@ -84,6 +84,7 @@ docker run -p 8000:8000 \
 | `POCKET_NETWORK_RPC_ENDPOINT` | Pocket Network RPC URL | — | ✅ |
 | `POCKET_NETWORK_DATA_ENDPOINT` | Pocket Network GraphQL URL | — | ✅ |
 | `POCKET_NETWORK_MCP_EXPOSURE` | Tool set to expose (see below) | `endpoints-tools` | ❌ |
+| `POCKET_NETWORK_SCHEMA_CACHE` | File where the GraphQL schema (introspected to check queries) is cached for an hour, shared by the processes of a deployment | `~/.cache/pokt-data-agent/schema-<endpoint hash>.json` | ❌ |
 | `MCP_API_KEY` | Bearer token for remote mode | — | ✅ (only for remote mode) |
 | `MCP_HOST` | Remote bind address | `0.0.0.0` | ❌ |
 | `MCP_PORT` | Remote bind port | `8000` | ❌ |

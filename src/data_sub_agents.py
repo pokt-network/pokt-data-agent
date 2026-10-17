@@ -224,15 +224,6 @@ class EndpointsDataAgent(DataSubAgentStateDict):
     def __init__(self, llm: ChatOpenAI):
         super().__init__(llm)
 
-    def get_field_names(self) -> List[str]:
-        return [
-            "getRewardsByDate",
-            "relayByBlockAndServices",
-            "getRelaysByServicePerPointJson",
-            "blocks",
-            "getAmountOfBlocksAndSuppliersByTimes",
-        ]
-
     def get_system_prompt(self) -> str:
         return """You are an expert on Pocket Network network usage analytics and its data endpoints.
 Your job is to interpret the needs for explaining and exploring the different ways of acccessing the available data endpoints, providing precise responses to the user queries.

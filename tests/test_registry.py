@@ -1,7 +1,7 @@
 import unittest
 
 from src.graphql_client import COVERAGE_NOTE, GRAPHQL_REGISTRY
-from src.graphql_validator import RAW_FIELD_PREFIXES
+from src.graphql_validator import EVENT_PREFIXES, HIDDEN_FIELDS, RAW_FIELD_PREFIXES
 from src.query_sub_agents import ALL_SUBAGENTS
 
 
@@ -12,8 +12,16 @@ class TestRegistry(unittest.TestCase):
                 with self.subTest(agent=agent.name, method=method):
                     self.assertIn(method, GRAPHQL_REGISTRY)
 
+    def test_every_registered_method_is_used_by_an_agent(self):
+        used = {method for agent in ALL_SUBAGENTS for method in agent.graphql_methods}
+        self.assertFalse(set(GRAPHQL_REGISTRY) - used)
+
     def test_no_raw_payout_table_is_recommended(self):
         self.assertFalse([name for name in GRAPHQL_REGISTRY if name.startswith(RAW_FIELD_PREFIXES)])
+
+    def test_nothing_the_api_stops_serving_is_recommended(self):
+        hidden = [name for name in GRAPHQL_REGISTRY if name in HIDDEN_FIELDS or name.startswith(EVENT_PREFIXES)]
+        self.assertFalse(hidden)
 
     def test_settlement_functions_state_the_coverage_rule(self):
         # The functions that read the settlement tables raise an error outside their coverage; the model must be
@@ -35,9 +43,10 @@ class TestRegistry(unittest.TestCase):
                 "getSupplyFlowsJson",
                 "getValidatorRewardsJson",
                 "getDelegatorIncomeJson",
+                "getClaimsJson",
             )
         ]
-        self.assertEqual(len(settlement), 14)
+        self.assertEqual(len(settlement), 15)
         for name in settlement:
             with self.subTest(method=name):
                 self.assertEqual(GRAPHQL_REGISTRY[name].fields_notes.get("coverage"), COVERAGE_NOTE)

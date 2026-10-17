@@ -116,7 +116,7 @@ return type (one level deep).  Use this to understand how to call a field
 and what data you can request back.
 
 Args:
-    field_name: Name of the top-level query field, e.g. "eventClaimSettleds"
+    field_name: Name of the top-level query field, e.g. "suppliers"
 """
 GET_FIELD_SCHEMA_NAME = "data_get_field_schema"
 
@@ -274,10 +274,10 @@ def get_type_info(type_name: str) -> str:
 GET_ENUM_VALUES_DESCRIPTION = """Return all valid values for a GraphQL ENUM type.
 
 Use this when you need to know the allowed values for an enum argument or
-filter field, e.g. groupBy keys, proof statuses, settlement reasons.
+filter field, e.g. orderBy values, proof statuses, settlement reasons.
 
 Args:
-    enum_name: Exact GraphQL enum type name, e.g. "EventClaimSettledGroupBy"
+    enum_name: Exact GraphQL enum type name, e.g. "SuppliersOrderBy"
 """
 GET_ENUM_VALUES_NAME = "data_get_enum_values"
 

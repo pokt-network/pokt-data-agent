@@ -10,11 +10,12 @@ from langchain_core.tools import tool
 
 from src.graphql_client import (
     GRAPHQL_REGISTRY,
+    MAX_RESULT_CHARS,
     POCKET_NETWORK_DATA_ENDPOINT,
     PocketNetworkAPIClient,
     range_notes,
 )
-from src.graphql_validator import LIVE_REWARD_FIELDS, MAX_FIRST, check_query_guards
+from src.graphql_validator import LIVE_REWARD_FIELDS, MAX_FIRST, check_query, page_notes
 from src.query_sub_agents import ALL_SUBAGENTS
 from src.rpc_client import (
     POCKET_NETWORK_RPC_ENDPOINT,
@@ -122,7 +123,7 @@ def get_method_data(method_name: str, protocol: str) -> Dict[str, Any]:
 GET_METHOD_EXAMPLES_DESCRIPTION = """Return curated, working example queries for a Pocket Network GraphQL or RPC API method.
 
 The examples are taken from production consumers of the API (such as the Pocket Network explorer) and show
-the exact argument names, filters, orderings and aggregations the method supports. Use them as templates
+the exact argument names, filters and orderings the method supports. Use them as templates
 when building a query or writing code against the API. Each example starts with a "#" comment stating its
 purpose. Placeholders like "pokt1..." must be replaced with real values before executing.
 
@@ -170,8 +171,6 @@ def get_method_examples(method_name: str, protocol: str) -> List[str]:
 # ---------------------------- EXECUTION TOOLS ---------------------------------
 ################################################################################
 
-# Longest result handed back to the calling LLM, in characters of JSON.
-MAX_RESULT_CHARS = 100_000
 
 EXECUTE_GRAPHQL_DESCRIPTION = f"""Executes a GraphQL method call and returns the result ("data" field) along with a sucess flag and an error string if not success.
 
@@ -181,7 +180,25 @@ Guards, checked before the query is sent:
   use their legacy... twin (same arguments) or the settlement catalog.
 - The row variants of the settlement catalog (getIncomeList, ..., moneyCoverageList) are refused: use the ...Json
   function of the same name, which says the range it covers.
-- Every connection that selects "nodes" or "edges" needs a literal "first" between 1 and {MAX_FIRST}.
+- Every connection that selects "nodes" or "edges" needs a literal "first" between 1 and {MAX_FIRST}, and is paged by
+  keyset, never by offset (an offset above 0 is refused): a fixed orderBy (ID_ASC), pageInfo {{ hasNextPage endCursor }}
+  and after: <endCursor>. A walk over several pages pins the same blockHeight on every page (the _metadata
+  lastProcessedHeight read once before the first page, data_get_indexer_status), so the pages are one consistent read;
+  stop when hasNextPage is false, and check the rows add up to totalCount. Row functions (getClaimsJson,
+  getActorLifecycleJson, ...) and keyset lists (getSupplierFleetList with rowLimit, getStakedSuppliersList,
+  getStakedSupplierServicesList, getStakedDomainServicesList, getGatewayDelegationsList) page with their before... /
+  after... keys (an offset on a keyset list is refused); such a keyset is not one snapshot either: a row that changes
+  between pages can repeat or go missing (getSupplierFleetList orders by stake). The functions without keys
+  (getApplicationFleetList, getGatewayFleetList, getServiceSummaryList) are not paged by offset: use their one-total
+  form, or the entity list. A function list is cut at 1000 rows with no signal. A result that is one page of a longer
+  list comes with a "Page:" note: never report it as the whole list.
+- What the API no longer serves is refused, with what to use instead: the event and message tables
+  (eventClaimSettleds, msgStake..., ...), relations from one entity to another (select the id column, e.g. blockId,
+  and query the other entity on its own), filters through a relation, aggregates and groupedAggregates (use totalCount
+  or a function that sums: getSupplierFleetList, getApplicationFleetList, getGatewayFleetList, getServiceSummaryList, getBlockStatsJson,
+  getMorseClaimSummaryList, the settlement catalog), node, nodeId and ...ByNodeId (look entities up by key).
+- The query is checked against the live API schema: unknown fields, arguments or types, and fields marked deprecated
+  (about to leave the API; the message names the replacement), are refused.
 A result longer than {MAX_RESULT_CHARS} characters is cut, and the error string says so.
 
 The settlement catalog and legacy... functions either raise an error for a range their data does not cover yet,
@@ -203,7 +220,8 @@ EXECUTE_GRAPHQL_NAME = "data_execute_graphql"
 @tool(EXECUTE_GRAPHQL_NAME, description=EXECUTE_GRAPHQL_DESCRIPTION)
 def execute_graphql(query: str) -> Tuple[bool, Any, str | None]:
     try:
-        guard_error = check_query_guards(parse(query))
+        document = parse(query)
+        guard_error = check_query(document)
     except GraphQLError as e:
         return False, None, f"GraphQL validation error: {e}"
     except RecursionError:
@@ -214,7 +232,13 @@ def execute_graphql(query: str) -> Tuple[bool, Any, str | None]:
 
     success, result, error = PocketNetworkAPIClient().execute_query(query)
     if success:
-        notes = " ".join(f"Coverage: {note}" for note in range_notes(result)) or None
+        notes = (
+            " ".join(
+                [f"Coverage: {note}" for note in range_notes(result)]
+                + [f"Page: {note}" for note in page_notes(document, result)]
+            )
+            or None
+        )
         text = json.dumps(result)
         if len(text) > MAX_RESULT_CHARS:
             return (
