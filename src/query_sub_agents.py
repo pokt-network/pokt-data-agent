@@ -679,14 +679,11 @@ class NetworkUsageAgent(QueryBuilderSubAgent):
     )
     name = "NetworkUsageAgent"
     graphql_methods = [
-        "getRewardsByDate",
+        "getNetworkRewardsJson",
         "getServiceUsageJson",
-        "getRelaysByServicePerPointJson",
         "blocks",
         "getBlockStatsJson",
-        "getAmountOfBlocksAndSuppliersByTimes",
-        "getLatestBlocksByDay",
-        "getSuppliersStakedAndBlocksByPointJson",
+        "getStakedSuppliersByServiceJson",
     ]
     rpc_methods = []
 
@@ -699,8 +696,8 @@ You specialize in retrieving and summarizing network-wide activity such as relay
 Your queries should prefer the most aggregated get... methods available, especially for date-range analysis, service-level traffic, and block/time summaries.
 Always apply a filter when possible, such as a date range, block range, service identifier, or time window, because the dataset is large.
 
-If the user asks for service traffic concentration, averages, or trends across services, use the per-service functions (getServiceUsageJson, getRelaysByServicePerPointJson) with a time bucket or truncation.
-If the user asks for the daily evolution of staked actors (validators, suppliers, apps, gateways) or supply, prefer getLatestBlocksByDay, which returns one block snapshot per day.
+If the user asks for service traffic concentration, averages, or trends across services, use the per-service function getServiceUsageJson with a time bucket.
+If the user asks for the daily evolution of staked actors (validators, suppliers, apps, gateways), use getBlockStatsJson with bucket day (the last_height of each day), then the blocks with those ids: one block snapshot per day.
 If the user asks for traffic or value per service (relays, compute units, upokt), prefer getServiceUsageJson, with the services asked about or topBySettled.
 If the user asks for totals or averages over many blocks (block time, block size, transactions, relays per block), use getBlockStatsJson.
 If the user asks about blocks, interpret “block number” as the id of a block, which is numeric.
@@ -723,14 +720,15 @@ class TokenomicsAgent(QueryBuilderSubAgent):
     )
     name = "TokenomicsAgent"
     graphql_methods = [
-        "getTotalSupplyBetweenDates",
-        "getSupplyCompositionBetweenDates",
-        "getTotalSupplyByDay",
+        "getSupplyJson",
+        "getSupplyCompositionJson",
+        "getSupplyCompositionAtList",
         "legacyMintBreakdownBetweenDates",
         "getSupplyFlowsJson",
         "moneyCoverageJson",
-        "getComputeUnitsToTokensMultiplierEvolution",
-        "getDaoBalanceAtHeight",
+        "getParamHistoryJson",
+        "balances",
+        "params",
         "getMorseClaimSummaryList",
         "getBlockSuppliesList",
     ]
@@ -747,7 +745,7 @@ You specialize in supply behavior, minting, burning, inflation, reimbursement, D
 Your queries should prefer get... methods that summarize monetary behavior over a time range, especially when the user asks for trends, snapshots, or comparisons across periods.
 Always apply a filter when possible, such as a date range or block height, because the dataset is large and the time dimension is essential for tokenomics.
 
-If the user asks for the DAO balance, use the block height when provided; if height is 0, treat it as the latest block.
+If the user asks for the DAO balance, read the tokenomics dao_reward_address param and the upokt balance of that address, both at the block height when provided (blockHeight omitted, or a height of 0, means the latest block).
 If the user asks about “supply composition,” prefer the method that breaks supply into staked, unstaked, supplier, application, DAO treasury, wrapped POKT, and related categories.
 If the user asks about migration progress or un-migrated supply, use getMorseClaimSummaryList (claimed vs unclaimed); the unclaimed amounts are supply not yet migrated from Morse to Shannon.
 If the user asks for trends, use grouped-by-date outputs and the coarsest useful interval.
@@ -771,7 +769,7 @@ class SettlementRewardsAgent(QueryBuilderSubAgent):
 
     graphql_methods = [
         "getClaimsJson",
-        "getClaimProofsDataByTime",
+        "getNetworkClaimsJson",
         "getIncomeJson",
         "legacyRewardsByAddressesAndTimeGroupByService",
         "legacyRewardsBySuppliersAndTimeGroupByAddressAndDate",
@@ -832,17 +830,15 @@ class ServiceEconomicsAgent(QueryBuilderSubAgent):
     graphql_methods = [
         "services",
         "getServiceUsageJson",
-        "getRelaysByServicePerPointJson",
-        "getAmountOfBlocksAndSuppliersByTimes",
+        "getStakedSuppliersByServiceJson",
         "getRelayMiningDifficultyJson",
         "getServiceSummaryList",
         "getStakedSupplierServicesList",
         "getStakedDomainServicesList",
         "getStakedSuppliersList",
-        "getRewardsByDomainsAndTimeGroupByService",
+        "getDomainServiceRewardsJson",
         "getSupplierFleetList",
         "getSupplierEarningsJson",
-        "getSuppliersStakedAndBlocksByPointJson",
         "applicationServices",
     ]
     rpc_methods = [
@@ -886,7 +882,7 @@ class GovernanceAdminAgent(QueryBuilderSubAgent):
         "params",
         "getParamHistoryJson",
         "authzs",
-        "getDaoBalanceAtHeight",
+        "balances",
         "services",
     ]
     rpc_methods = [
@@ -948,7 +944,7 @@ class StakingParticipantStateAgent(QueryBuilderSubAgent):
         "getSupplierEarningsJson",
         "getSupplierProofsJson",
         "getSupplierPenaltiesJson",
-        "getOverservicedByAddressesAndTime",
+        "getOverservicedJson",
         "getValidatorRewardsJson",
         "getDelegatorIncomeJson",
         "getAppAutoUnstakesJson",
@@ -976,7 +972,7 @@ You specialize in application staking, gateway staking, supplier staking, delega
 Your queries should prefer the most specific get... GraphQL methods for participant health and history, and use getActorLifecycleJson to understand lifecycle transitions such as staking, unbonding or slashing.
 Always apply a filter when possible, such as address, address list, time range, block range, or service context, because participant-state data is large and entity-specific.
 
-If the user asks about application health, gateway status, or supplier lifecycle, combine the stake history (getActorLifecycleJson) with overservicing (getOverservicedByAddressesAndTime).
+If the user asks about application health, gateway status, or supplier lifecycle, combine the stake history (getActorLifecycleJson) with overservicing (getOverservicedJson, operators: the supplier's rev_share addresses).
 If the user asks for counts or total stake of applications or suppliers, use getApplicationFleetList, getSupplierFleetList or getGatewayFleetList (byApplication / bySupplier / byGateway false for one total); for validators, the newest blocks row (stakedValidators, stakedValidatorsTokens); a count alone is the totalCount of the entity table with a stakeStatus filter. Do not accumulate events.
 If the user asks which suppliers serve a service (or which services a supplier is staked in), use supplierServiceConfigs filtered by serviceId or supplierId.
 If the user asks about delegators of a supplier node, treat them as the supplier's rev_share addresses: the addresses configured in the supplier rev_share that receive a share of its reward tokens (for a given service configured). Use getSupplierEarningsJson, getSupplierProofsJson and getSupplierPenaltiesJson with operators: [that address] (one query, bySupplier: false) for what the suppliers they share revenue with earned, proved and lost, and do not confuse them with validator (consensus) delegators.
@@ -1052,8 +1048,7 @@ class ChainActivityAgent(QueryBuilderSubAgent):
         "getHeightAt",
         "getBlockSuppliesList",
         "validators",
-        "getProducedBlocksByValidator",
-        "getMissingValidatorBlocks",
+        "getValidatorBlocksList",
     ]
     rpc_methods = []
 
@@ -1069,7 +1064,7 @@ If the user provides a 64-character hex string, treat it as a transaction hash (
 If the user asks for the transaction history of an address, filter transactions by signerAddress and order by BLOCK_ID_DESC.
 If the user asks how many transactions succeeded or failed in a time window, use getBlockStatsJson.
 If the user asks where a wallet sent or received tokens, use getNativeTransfersJson (it carries the block time and the transaction's fees and code); use nativeTransfers filtered by senderId and/or recipientId only for plain ids.
-If the user asks about validator uptime, combine getProducedBlocksByValidator and getMissingValidatorBlocks from a starting block id; note their validatorAddress argument is the hex consensus address, not the poktvaloper... one.
+If the user asks about validator uptime, combine getValidatorBlocksList with kind "produced" and with kind "missed" from the same fromHeight, every page of each; note its validatorAddress argument is the hex consensus address, not the poktvaloper... one.
 
 The user might use the following expressions:
 - "tx"/"transaction hash": the transaction id, a 64-character hex string.

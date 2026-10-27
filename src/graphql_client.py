@@ -394,27 +394,37 @@ GRAPHQL_REGISTRY = {
             "# Count accounts active (balance updated) since a block height (since a date: getActiveAccountsList)\n"
             'query { balances(filter: {lastUpdatedBlockId: {greaterThanOrEqualTo: "950000"}, '
             'denom: {equalTo: "upokt"}}) { totalCount } }',
+            "# DAO treasury balance in upokt at a block (omit both blockHeight for the latest): the DAO address is the "
+            "tokenomics dao_reward_address param at that height, then its balance at the same height\n"
+            'query { params(blockHeight: "980000", filter: {namespace: {equalTo: "tokenomics"}, key: {equalTo: '
+            '"dao_reward_address"}}, orderBy: [BLOCK_ID_DESC], first: 1) { nodes { value blockId } } }',
+            'query { balances(blockHeight: "980000", filter: {accountId: {equalTo: "<dao_reward_address>"}, '
+            'denom: {equalTo: "upokt"}}, first: 1) { nodes { amount lastUpdatedBlockId } } }',
         ],
     ),
-    "getRewardsByDate": QueryFieldInfo(
-        name="getRewardsByDate",
-        description="Total relays, computed units, and claimed tokens data on a given period for the whole network",
+    "getNetworkRewardsJson": QueryFieldInfo(
+        name="getNetworkRewardsJson",
+        description="Network totals of the settled claims on a given period for the whole network, as one total or per bucket: relays, estimated relays, compute units (claimed and estimated) and claimed upokt, with the first and last height of each bucket.",
+        fields_notes=CATALOG_NOTES,
         examples=[
-            "# Network relays / computed units / claimed tokens bucketed by interval (e.g. day, hour)\n"
-            'query { getRewardsByDate(startDate: "2026-06-01T00:00:00Z", endDate: "2026-06-11T00:00:00Z", '
-            'truncInterval: "day") }',
+            "# Network relays / compute units / claimed tokens per day\n"
+            'query { getNetworkRewardsJson(rangeStart: "2026-10-10T00:00:00Z", rangeEnd: "2026-10-20T00:00:00Z", '
+            'bucket: "day") }',
         ],
     ),
-    "getTotalSupplyBetweenDates": QueryFieldInfo(
-        name="getTotalSupplyBetweenDates",
-        description="Total network supply and its composition: staked, unstaked, supplier stakes, apps stakes, etc. on a given period for the whole network",
-    ),
-    "getDaoBalanceAtHeight": QueryFieldInfo(
-        name="getDaoBalanceAtHeight",
-        description="DAO holdings in upokt at the given block hieght",
+    "getSupplyJson": QueryFieldInfo(
+        name="getSupplyJson",
+        description="Network supply at the last block with a recorded upokt supply in each bucket (height, block_time): network_supply_upokt (the upokt supply on Shannon), unmigrated_upokt (the Morse balances and stakes not claimed yet at that block) and total_supply_upokt, their sum. Use it for the supply on a date, its daily evolution, and the supply at the end of a period.",
+        fields_notes={
+            **CATALOG_NOTES,
+            "bucket": 'day (the default, also when omitted or null), week, month or year: there is no single-total form. For the supply at the end of a range use bucket "year" and read the newest row (the first in "data": rows come newest first).',
+            "unmigrated_upokt": "One number for the whole unmigrated supply; its split into liquid balance, supplier stake and application stake is in getMorseClaimSummaryList, for now only.",
+        },
         examples=[
-            "# DAO treasury balance in upokt at the latest block (no argument = latest)\n"
-            "query { getDaoBalanceAtHeight }",
+            "# Daily supply series for a date range\n"
+            'query { getSupplyJson(rangeStart: "2026-10-10T00:00:00Z", rangeEnd: "2026-10-20T00:00:00Z", bucket: "day") }',
+            "# Supply at the end of a range: bucket year, the newest row (the first in data)\n"
+            'query { getSupplyJson(rangeStart: "2025-06-01T00:00:00Z", rangeEnd: "2026-10-20T00:00:00Z", bucket: "year") }',
         ],
     ),
     "params": QueryFieldInfo(
@@ -442,7 +452,7 @@ GRAPHQL_REGISTRY = {
             "timeToBlock": "Time spent generating the block in milliseconds.",
             "size": "Block size in bytes.",
             "hash": "Block hash; use filter {hash: {equalTo: ...}} to look up a block by hash.",
-            "totals": "Sums and averages over many blocks (relays, compute units, transactions, block time and size): getBlockStatsJson. The supply: getTotalSupplyBetweenDates; one block's supply per denomination: getBlockSuppliesList.",
+            "totals": "Sums and averages over many blocks (relays, compute units, transactions, block time and size): getBlockStatsJson. The supply: getSupplyJson; one block's supply per denomination: getBlockSuppliesList.",
         },
         examples=[
             "# Latest block with network-wide snapshot fields (staked actors, supply, relays)\n"
@@ -451,6 +461,13 @@ GRAPHQL_REGISTRY = {
             "stakedGateways timeToBlock size } } }",
             "# Look up a single block by height (the block id)\n"
             'query { block(id: "790000") { height: id hash timestamp totalTxs proposerAddress } }',
+            "# One block snapshot per day (daily evolution of staked actors): the last_height of each day from "
+            "getBlockStatsJson with bucket day, then the blocks with those ids\n"
+            'query { getBlockStatsJson(rangeStart: "2026-10-10T00:00:00Z", rangeEnd: "2026-10-20T00:00:00Z", '
+            'bucket: "day") }',
+            'query { blocks(filter: {id: {in: ["959319", "960750"]}}, orderBy: ID_ASC, first: 100) { nodes { '
+            "height: id timestamp stakedValidators stakedValidatorsTokens stakedSuppliers stakedSuppliersTokens "
+            "stakedApps stakedAppsTokens stakedGateways stakedGatewaysTokens } } }",
         ],
     ),
     "authzs": QueryFieldInfo(
@@ -504,82 +521,94 @@ GRAPHQL_REGISTRY = {
             "pageInfo { hasNextPage endCursor } nodes { id ownerId operatorId stakeAmount stakeStatus } } }",
         ],
     ),
-    "getComputeUnitsToTokensMultiplierEvolution": QueryFieldInfo(
-        name="getComputeUnitsToTokensMultiplierEvolution",
-        description="Tracks the changes of the CUTTM over time, a critical tokenomics parameter that stabilices the cost of the compute unit to the target USD value.",
-    ),
-    "getRelaysByServicePerPointJson": QueryFieldInfo(
-        name="getRelaysByServicePerPointJson",
-        description="Returns a JSON string containing the total traffic per service of the network in the provided dates and truncated as requested. Usefull for network-wide traffic analisys.",
-        examples=[
-            "# Per-service traffic time-series (JSON string result)\n"
-            'query { getRelaysByServicePerPointJson(startTimestamp: "2026-06-01T00:00:00Z", '
-            'endTimestamp: "2026-06-11T00:00:00Z", truncInterval: "day") }',
-        ],
-    ),
-    "getAmountOfBlocksAndSuppliersByTimes": QueryFieldInfo(
-        name="getAmountOfBlocksAndSuppliersByTimes",
-        description="Returns a JSON with suppliers per service. Use this to get average of suppliers per service on a given date range. The returned value will be the SUM of the number of suppliers and blocks observed in each day, between the provided dates. To obtain the average amount of suppliers in a service, divide the reported number by the amount of blocks returned in the query.",
+    "getStakedSuppliersByServiceJson": QueryFieldInfo(
+        name="getStakedSuppliersByServiceJson",
+        description="Suppliers staked per service over a date range, from a daily rollup. The returned value is the SUM of the number of suppliers staked at each block of the range, with the number of those blocks: to obtain the average amount of suppliers in a service, divide suppliers_staked by blocks. services keeps those services (omitted = all). For a series over time, one call per period in the same request (aliases, up to 20).",
         fields_notes={
-            "blocks": "Total number of blocks in the time range.",
-            "suppliers_staked": 'Sum of the number of suppliers staked at each block time. Divide this by "blocks" to get the average amount of suppliers in the service for the selected period.',
-            "computeUnitsPerRelay": "Numeber of Compute Units to be consumed per call to this service (known normaly by CUPR)",
+            "rangeStart/rangeEnd": CATALOG_NOTES["rangeStart/rangeEnd"],
+            "coverage": COVERAGE_NOTE,
+            "result": CATALOG_NOTES["result"],
+            "blocks": "Number of blocks of the range with staked suppliers of the service.",
+            "suppliers_staked": 'Sum of the number of suppliers staked at each block. Divide this by "blocks" to get the average amount of suppliers in the service for the selected period.',
             "service_id": "ID of the service.",
         },
         examples=[
             "# Sum of blocks and suppliers-staked per service in a date range (divide to get the average)\n"
-            'query { getAmountOfBlocksAndSuppliersByTimes(startDate: "2026-06-01T00:00:00Z", '
-            'endDate: "2026-06-11T00:00:00Z") }',
+            'query { getStakedSuppliersByServiceJson(rangeStart: "2026-10-10T00:00:00Z", rangeEnd: "2026-10-20T00:00:00Z") }',
+            "# Suppliers staked in a service, day by day (one aliased call per day)\n"
+            'query { d1: getStakedSuppliersByServiceJson(rangeStart: "2026-10-10T00:00:00Z", '
+            'rangeEnd: "2026-10-11T00:00:00Z", services: ["eth"]) d2: getStakedSuppliersByServiceJson('
+            'rangeStart: "2026-10-11T00:00:00Z", rangeEnd: "2026-10-12T00:00:00Z", services: ["eth"]) }',
         ],
     ),
-    "getSupplyCompositionBetweenDates": QueryFieldInfo(
-        name="getSupplyCompositionBetweenDates",
-        description="Returns a JSON list containing the detailed supply composition (staked in apps/services/gateways/suppliers, DAO treasury, wrapped pokt, etc) along with the total supply, the date and block of the data. Usefull for network-wide supply evolution analisys, total staked tokens analysis, total migrated tokens, etc.",
+    "getSupplyCompositionJson": QueryFieldInfo(
+        name="getSupplyCompositionJson",
+        description="Detailed supply composition per bucket, at the same block getSupplyJson reads (height, block_time): one row per label with its amount_upokt, the upokt balances at that block by module account (application, supplier, gateway, bonded_tokens_pool, ...), dao (the DAO treasury), wrapped (wrapped pokt, the bridge address) and others. The totals (network, unmigrated and total supply) are in getSupplyJson: ask both in the same request. Usefull for network-wide supply evolution analisys, total staked tokens analysis, total migrated tokens, etc. For one block, getSupplyCompositionAtList.",
         fields_notes={
-            "truncInterval": 'Granularity of the returned series ("day", "month", "year"). Set to "day" if the user is asking for current supply and use current date and day before for the date limits. For long spans (multiple years) prefer "month" or "year" so a single query returns one point per interval instead of one per day.',
+            **CATALOG_NOTES,
+            "bucket": 'day (the default, also when omitted or null), week, month or year: there is no single-total form. For the composition at the end of a range use bucket "year" and read the newest row (the first in "data": rows come newest first).',
+        },
+        examples=[
+            "# Supply breakdown AND total supply over the last 12 months\n"
+            "# in monthly intervals with a single request (one point per month, not per day)\n"
+            'query { composition: getSupplyCompositionJson(rangeStart: "2025-10-27T00:00:00Z", '
+            'rangeEnd: "2026-10-27T00:00:00Z", bucket: "month") supply: getSupplyJson(rangeStart: "2025-10-27T00:00:00Z", '
+            'rangeEnd: "2026-10-27T00:00:00Z", bucket: "month") }',
+        ],
+    ),
+    "getSupplyCompositionAtList": QueryFieldInfo(
+        name="getSupplyCompositionAtList",
+        description="Supply at one block, computed live: the last block at or below atHeight (omitted = the latest) with a recorded upokt supply, whose height and blockTime every row carries; networkSupplyUpokt, unmigratedUpokt and totalSupplyUpokt repeated on each row; and one row per composition label (module account, dao, wrapped, others) with its amountUpokt. Use it for the current supply and its breakdown.",
+        fields_notes={
+            "atHeight": "A block height (omitted = the latest); for a date, getHeightAt(atTime) gives it.",
+            "result": "Rows with camelCase fields to select: height blockTime networkSupplyUpokt unmigratedUpokt totalSupplyUpokt label amountUpokt; amounts in upokt.",
         },
         examples=[
             "# Current supply breakdown and total supply (one snapshot)\n"
-            'query { getSupplyCompositionBetweenDates(startDate: "2026-06-24T00:00:00Z", '
-            'endDate: "2026-06-25T00:00:00Z", truncInterval: "day") }',
-            "# Supply breakdown AND total supply over the last 12 months\n"
-            "# in monthly intervals with a single query (one point per month, not per day)\n"
-            'query { getSupplyCompositionBetweenDates(startDate: "2025-06-25T00:00:00Z", '
-            'endDate: "2026-06-25T00:00:00Z", truncInterval: "month") }',
+            "query { getSupplyCompositionAtList { height blockTime networkSupplyUpokt unmigratedUpokt totalSupplyUpokt "
+            "label amountUpokt } }",
         ],
     ),
-    "getTotalSupplyByDay": QueryFieldInfo(
-        name="getTotalSupplyByDay",
-        description="Returns supply by day for quick analysis, contains shannon_supply, unstaked_balance_amount, supplier_stake_amount, application_stake_amount and total_supply.",
-        examples=[
-            "# Daily supply series for a date range\n"
-            'query { getTotalSupplyByDay(startDate: "2026-06-01T00:00:00Z", endDate: "2026-06-11T00:00:00Z") }',
-        ],
-    ),
-    "getClaimProofsDataByTime": QueryFieldInfo(
-        name="getClaimProofsDataByTime",
-        description="Provides data on the claim-proof data between the provided dates and the given granualirity. Usefull for global analysis of total claims/proofs/expirations denominated in computed units, relays and upokt",
-        examples=[
-            "# Network-wide claims vs proofs time-series\n"
-            'query { getClaimProofsDataByTime(startTs: "2026-06-01T00:00:00Z", endTs: "2026-06-11T00:00:00Z", '
-            'truncInterval: "day") }',
-        ],
-    ),
-    "getRewardsByDomainsAndTimeGroupByService": QueryFieldInfo(
-        name="getRewardsByDomainsAndTimeGroupByService",
-        description="Returns the total number of suppliers, rewards (CUs, upokt, relays) stake for a given domain name in each of their staked services.",
+    "getNetworkClaimsJson": QueryFieldInfo(
+        name="getNetworkClaimsJson",
+        description="Network-wide claims per bucket: created (claims, claimed_relays, claimed_compute_units, claimed_upokt and the estimated ones), settled (settled_*: claims proven and paid) and expired (expired_*: no valid proof in time), with the first and last height. Usefull for global analysis of total claims/proofs/expirations denominated in computed units, relays and upokt.",
         fields_notes={
-            "domains": 'A vector of domains to query: ["foo.bar", "example.com", ...]. extracted normally from the staked endpoint data of a supplier.',
-            "endTs/startTs": "These only respect DAY granularity, it will ignore any hours-min-sec passed, it is a DATE field, not a DATETIME",
+            **CATALOG_NOTES,
+            "expired_*": "null when expired_claims is 0: no claim expired (0), not a range that is not covered.",
         },
-    ),
-    "getOverservicedByAddressesAndTime": QueryFieldInfo(
-        name="getOverservicedByAddressesAndTime",
-        description="Returns the total overservicing done by an application or a supplier. Overservice occus when the appplication pays less to the supplier than expected. This is usefull for tracking suppliers that are being too optimistic or by app that are close to be zeroed in stake. A high overservicing is bad for the network.",
         examples=[
-            "# Overservicing time-series for a group of addresses\n"
-            'query { getOverservicedByAddressesAndTime(addresses: ["pokt1..."], '
-            'startTs: "2026-06-01T00:00:00Z", endTs: "2026-06-11T00:00:00Z", truncInterval: "day") }',
+            "# Network-wide claims vs settled vs expired, per day\n"
+            'query { getNetworkClaimsJson(rangeStart: "2026-10-10T00:00:00Z", rangeEnd: "2026-10-20T00:00:00Z", '
+            'bucket: "day") }',
+        ],
+    ),
+    "getDomainServiceRewardsJson": QueryFieldInfo(
+        name="getDomainServiceRewardsJson",
+        description="What the suppliers serving some domains earned in each of their staked services: relays, estimated relays, compute units (claimed and estimated), claimed_upokt (the gross rewards) and staked_suppliers on the service's last day read, summed over whole UTC days, with first_day / last_day and the first and last height.",
+        fields_notes={
+            "domains": 'Up to 200 endpoint root domains: ["foo.bar", "example.com", ...]. extracted normally from the staked endpoint data of a supplier.',
+            "rangeStart/rangeEnd": "Whole UTC days: the days that start inside [rangeStart, rangeEnd). Pass the first midnight and the midnight after the last day; a start in the middle of a day leaves that day out.",
+            "staked_suppliers": "With several domains, the distinct suppliers across them (a supplier on two of them counts once); null for several domains on a day whose supplier sets are not written yet.",
+            "coverage": COVERAGE_NOTE,
+            "result": CATALOG_NOTES["result"],
+        },
+        examples=[
+            "# Rewards per service of the suppliers on a domain, from 2026-10-10 to 2026-10-19 included\n"
+            'query { getDomainServiceRewardsJson(domains: ["example.com"], rangeStart: "2026-10-10T00:00:00Z", '
+            'rangeEnd: "2026-10-20T00:00:00Z") }',
+        ],
+    ),
+    "getOverservicedJson": QueryFieldInfo(
+        name="getOverservicedJson",
+        description="Returns the total overservicing of the Staked suppliers that share revenue with some addresses now (operators: addresses in the rev_share of a live service config), per bucket: expected_burn_upokt and effective_burn_upokt summed over their application overservicing events, and the events. Overservice occus when the appplication pays less to the supplier than expected (effective below expected). This is usefull for tracking suppliers that are being too optimistic or apps that are close to be zeroed in stake. A high overservicing is bad for the network.",
+        fields_notes={
+            **CATALOG_NOTES,
+            "operators": "Required: 1 to 200 rev_share addresses (pokt1...).",
+        },
+        examples=[
+            "# Overservicing per day of the suppliers that share revenue with some addresses\n"
+            'query { getOverservicedJson(operators: ["pokt1..."], rangeStart: "2026-10-10T00:00:00Z", '
+            'rangeEnd: "2026-10-20T00:00:00Z", bucket: "day") }',
         ],
     ),
     "transactions": QueryFieldInfo(
@@ -718,48 +747,24 @@ GRAPHQL_REGISTRY = {
             "unstakedBalanceAmount supplierStakeAmount applicationStakeAmount } } }",
         ],
     ),
-    "getLatestBlocksByDay": QueryFieldInfo(
-        name="getLatestBlocksByDay",
-        description='Returns the latest block of each day in the provided date range, with the per-day snapshot fields of the block (staked validators/suppliers/apps/gateways and their tokens, supply, etc.). This is the cheapest way to build daily evolution series of staked actors; prefer it over paging the "blocks" table.',
-        examples=[
-            "# One block snapshot per day (daily evolution of staked actors and supply)\n"
-            'query { getLatestBlocksByDay(startDate: "2026-06-01T00:00:00Z", endDate: "2026-06-11T00:00:00Z") }',
-        ],
-    ),
-    "getSuppliersStakedAndBlocksByPointJson": QueryFieldInfo(
-        name="getSuppliersStakedAndBlocksByPointJson",
-        description='Returns a JSON time-series of suppliers staked per service (amount and tokens) truncated at the requested interval. Time-series counterpart of "getAmountOfBlocksAndSuppliersByTimes" (which only returns totals for the range).',
-        examples=[
-            "# Suppliers staked per service over time (JSON string result)\n"
-            'query { getSuppliersStakedAndBlocksByPointJson(startTimestamp: "2026-06-01T00:00:00Z", '
-            'endTimestamp: "2026-06-11T00:00:00Z", truncInterval: "day") }',
-        ],
-    ),
-    "getProducedBlocksByValidator": QueryFieldInfo(
-        name="getProducedBlocksByValidator",
-        description='Returns the blocks produced by a validator since the given block id. Combine with "getMissingValidatorBlocks" to compute validator uptime.',
+    "getValidatorBlocksList": QueryFieldInfo(
+        name="getValidatorBlocksList",
+        description='Blocks a validator produced (kind "produced": it proposed them) or missed (kind "missed": the block\'s last commit has no signature of it) from fromHeight to toHeight (omitted = the latest), newest first, with their blockTime. Combine both kinds from the same fromHeight to compute validator uptime.',
         fields_notes={
-            "fromId": "Starting block id (a number).",
             "validatorAddress": 'The validator consensus address in hex (NOT the "poktvaloper..." bech32 form).',
+            "fromHeight": "Required: the starting block height (a number).",
+            "rowLimit": "Rows per call, newest first: default 100, at most 1000. For the next page pass the last row's height as beforeHeight; a page shorter than rowLimit is the last one. Count every page before computing an uptime.",
+            "result": "Rows with camelCase fields to select: height blockTime.",
         },
         examples=[
             "# Validator uptime: produced vs missed blocks since a height\n"
-            'query { producedBlocks: getProducedBlocksByValidator(fromId: "790000", '
-            'validatorAddress: "<VALIDATOR_HEX_ADDRESS>") '
-            'missedBlocks: getMissingValidatorBlocks(fromId: "790000", '
-            'validatorAddress: "<VALIDATOR_HEX_ADDRESS>") }',
-        ],
-    ),
-    "getMissingValidatorBlocks": QueryFieldInfo(
-        name="getMissingValidatorBlocks",
-        description='Returns the block ids that the validator missed (did not sign) since the given block id. Combine with "getProducedBlocksByValidator" to compute validator uptime.',
-        fields_notes={
-            "fromId": "Starting block id (a number).",
-            "validatorAddress": 'The validator consensus address in hex (NOT the "poktvaloper..." bech32 form).',
-        },
-        examples=[
-            "# Block ids a validator missed since a height\n"
-            'query { getMissingValidatorBlocks(fromId: "790000", validatorAddress: "<VALIDATOR_HEX_ADDRESS>") }',
+            'query { producedBlocks: getValidatorBlocksList(kind: "produced", fromHeight: "790000", '
+            'validatorAddress: "<VALIDATOR_HEX_ADDRESS>", rowLimit: 1000) { height } '
+            'missedBlocks: getValidatorBlocksList(kind: "missed", fromHeight: "790000", '
+            'validatorAddress: "<VALIDATOR_HEX_ADDRESS>", rowLimit: 1000) { height } }',
+            "# Next page of the missed blocks: the last row's height as beforeHeight\n"
+            'query { getValidatorBlocksList(kind: "missed", fromHeight: "790000", validatorAddress: '
+            '"<VALIDATOR_HEX_ADDRESS>", rowLimit: 1000, beforeHeight: "795000") { height blockTime } }',
         ],
     ),
     "supplierServiceConfigs": QueryFieldInfo(
@@ -986,6 +991,7 @@ GRAPHQL_REGISTRY = {
         fields_notes={
             "rangeStart/rangeEnd": "The range [start, end) in UTC with an explicit zone, e.g. 2026-10-01T00:00:00Z.",
             "bucket": CATALOG_NOTES["bucket"],
+            "last_height": "The last block of each bucket: with bucket day, the day's latest block.",
             "result": '{"range": {...}, "data": [rows]}: one row per bucket in "data" with snake_case keys, numbers as strings. A bucket outside covered_from / covered_to or in a gap is not covered yet, never 0.',
         },
         examples=[
@@ -1248,6 +1254,9 @@ GRAPHQL_REGISTRY = {
             "# Top 20 services by settled value yesterday\n"
             'query { getServiceUsageJson(rangeStart: "2026-10-04T00:00:00Z", rangeEnd: "2026-10-05T00:00:00Z", '
             "topBySettled: 20) }",
+            "# Daily traffic of every service (the 200 that settled the most)\n"
+            'query { getServiceUsageJson(rangeStart: "2026-10-10T00:00:00Z", rangeEnd: "2026-10-13T00:00:00Z", '
+            'bucket: "day", topBySettled: 200) }',
             "# Daily traffic of given services\n"
             'query { getServiceUsageJson(services: ["eth", "base"], rangeStart: "2026-09-28T00:00:00Z", '
             'rangeEnd: "2026-10-05T00:00:00Z", bucket: "day") }',
@@ -1333,6 +1342,10 @@ GRAPHQL_REGISTRY = {
             "# Every change of the tokenomics params in a year\n"
             'query { getParamHistoryJson(namespaces: ["tokenomics"], rangeStart: "2025-10-01T00:00:00Z", '
             'rangeEnd: "2026-10-01T00:00:00Z") }',
+            "# Changes of the compute units to tokens multiplier (CUTTM), the tokenomics parameter that keeps the cost "
+            "of a compute unit at its USD target; its value at a time is the newest change at or before it\n"
+            'query { getParamHistoryJson(namespaces: ["shared"], keys: ["compute_units_to_tokens_multiplier"], '
+            'rangeStart: "2025-06-01T00:00:00Z", rangeEnd: "2026-10-20T00:00:00Z") }',
         ],
     ),
     "moneyCoverageJson": QueryFieldInfo(
