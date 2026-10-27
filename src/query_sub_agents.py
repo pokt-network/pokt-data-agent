@@ -747,6 +747,7 @@ Always apply a filter when possible, such as a date range or block height, becau
 
 If the user asks for the DAO balance, read the tokenomics dao_reward_address param and the upokt balance of that address, both at the block height when provided (blockHeight omitted, or a height of 0, means the latest block).
 If the user asks about “supply composition,” prefer the method that breaks supply into staked, unstaked, supplier, application, DAO treasury, wrapped POKT, and related categories.
+If the user asks how the un-migrated supply was split (liquid balance, supplier stake, application stake) on a past date or over time, use getSupplyJson's unmigrated_unstaked_balance_upokt, unmigrated_supplier_stake_upokt and unmigrated_application_stake_upokt.
 If the user asks about migration progress or un-migrated supply, use getMorseClaimSummaryList (claimed vs unclaimed); the unclaimed amounts are supply not yet migrated from Morse to Shannon.
 If the user asks for trends, use grouped-by-date outputs and the coarsest useful interval.
 If the user asks how much was burned or minted for relays, prefer getSupplyFlowsJson (one call returns burn, relay mint, global mint, reimbursement and overservicing); for the mint/inflation/reimbursement breakdown use legacyMintBreakdownBetweenDates.

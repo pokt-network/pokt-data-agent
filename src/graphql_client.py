@@ -414,11 +414,12 @@ GRAPHQL_REGISTRY = {
     ),
     "getSupplyJson": QueryFieldInfo(
         name="getSupplyJson",
-        description="Network supply at the last block with a recorded upokt supply in each bucket (height, block_time): network_supply_upokt (the upokt supply on Shannon), unmigrated_upokt (the Morse balances and stakes not claimed yet at that block) and total_supply_upokt, their sum. Use it for the supply on a date, its daily evolution, and the supply at the end of a period.",
+        description="Network supply at the last block with a recorded upokt supply in each bucket (height, block_time): network_supply_upokt (the upokt supply on Shannon), unmigrated_upokt (the Morse balances and stakes not claimed yet at that block) split into unmigrated_unstaked_balance_upokt, unmigrated_supplier_stake_upokt and unmigrated_application_stake_upokt, and total_supply_upokt, network plus unmigrated. Use it for the supply on a date, its daily evolution, the supply at the end of a period, and how the unmigrated supply was split at any date.",
         fields_notes={
             **CATALOG_NOTES,
             "bucket": 'day (the default, also when omitted or null), week, month or year: there is no single-total form. For the supply at the end of a range use bucket "year" and read the newest row (the first in "data": rows come newest first).',
-            "unmigrated_upokt": "One number for the whole unmigrated supply; its split into liquid balance, supplier stake and application stake is in getMorseClaimSummaryList, for now only.",
+            "unmigrated_upokt": "The whole unmigrated supply at that block; unmigrated_unstaked_balance_upokt (liquid balance), unmigrated_supplier_stake_upokt and unmigrated_application_stake_upokt split it, and add up to it.",
+            "unmigrated_*_upokt": "Null only for a day the rollup has not been backfilled with the split: say the split is not available for it, never treat null as 0.",
         },
         examples=[
             "# Daily supply series for a date range\n"
@@ -523,7 +524,7 @@ GRAPHQL_REGISTRY = {
     ),
     "getStakedSuppliersByServiceJson": QueryFieldInfo(
         name="getStakedSuppliersByServiceJson",
-        description="Suppliers staked per service over a date range, from a daily rollup. The returned value is the SUM of the number of suppliers staked at each block of the range, with the number of those blocks: to obtain the average amount of suppliers in a service, divide suppliers_staked by blocks. services keeps those services (omitted = all). For a series over time, one call per period in the same request (aliases, up to 20).",
+        description="Suppliers staked per service over a date range, from a daily rollup. The returned value is the SUM of the number of suppliers staked at each block of the range, with the number of those blocks: to obtain the average amount of suppliers in a service, divide suppliers_staked by blocks. suppliers_stake_upokt is their stake summed the same way: divide it by blocks for the average stake per block. services keeps those services (omitted = all). For a series over time, one call per period in the same request (aliases, up to 20).",
         fields_notes={
             "rangeStart/rangeEnd": CATALOG_NOTES["rangeStart/rangeEnd"],
             "coverage": COVERAGE_NOTE,
@@ -531,6 +532,7 @@ GRAPHQL_REGISTRY = {
             "blocks": "Number of blocks of the range with staked suppliers of the service.",
             "suppliers_staked": 'Sum of the number of suppliers staked at each block. Divide this by "blocks" to get the average amount of suppliers in the service for the selected period.',
             "service_id": "ID of the service.",
+            "suppliers_stake_upokt": 'Sum, over the same blocks, of the stake of the suppliers staked in the service (upokt). A supplier on several services counts its whole stake in each, so do not add services up for a network total. Divide by "blocks" for the average stake per block. Null when a day of the range has not been backfilled with it: say it is not available, never treat it as 0.',
         },
         examples=[
             "# Sum of blocks and suppliers-staked per service in a date range (divide to get the average)\n"
