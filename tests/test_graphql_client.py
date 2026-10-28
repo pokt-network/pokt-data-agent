@@ -64,6 +64,13 @@ class TestPageNotes(unittest.TestCase):
         query = '{ getSupplierFleetList(stakeStatuses: ["Staked"], first: 2000) { supplierId } }'
         self.assertEqual(len(page_notes(query, {"getSupplierFleetList": rows})), 1)
 
+    def test_validator_blocks_without_row_limit_at_the_default_are_a_page(self):
+        # getValidatorBlocksList returns 100 rows when rowLimit is omitted, not the 1000 of the API cap
+        query = '{ getValidatorBlocksList(kind: "missed", fromHeight: "1", validatorAddress: "AB") { height } }'
+        rows = [{"height": "1"}] * DEFAULT_ROW_LIMIT
+        self.assertEqual(len(page_notes(query, {"getValidatorBlocksList": rows})), 1)
+        self.assertEqual(page_notes(query, {"getValidatorBlocksList": rows[:-1]}), [])
+
     def test_entity_list_pages(self):
         for query, value in (
             (

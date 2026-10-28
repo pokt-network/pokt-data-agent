@@ -95,6 +95,13 @@ CATALOG_FUNCTIONS = frozenset(
         "getSupplierProofs",
         "getParamHistory",
         "getBlockStats",
+        "getStakedSuppliersByService",
+        "getSupply",
+        "getSupplyComposition",
+        "getNetworkRewards",
+        "getNetworkClaims",
+        "getOverserviced",
+        "getDomainServiceRewards",
     }
 )
 # The rest of pocketdex CATALOG_FUNCTIONS: functions that list rows one by one, newest first, at most rowLimit a call
@@ -111,6 +118,8 @@ ROW_FUNCTIONS = frozenset(
     }
 )
 DEFAULT_ROW_LIMIT = 100
+# Function lists that return DEFAULT_ROW_LIMIT rows when rowLimit is omitted.
+DEFAULT_ROW_LIMIT_LISTS = frozenset({"getValidatorBlocksList"})
 # Function lists paged by their own keyset (rowLimit and the after... keys of the last row): an offset is refused.
 KEYSET_LISTS = frozenset(
     {
@@ -136,7 +145,7 @@ HIDDEN_FIELDS = {
     "msgStakeGateways": 'getActorLifecycleJson with kind: "gateway"; current stake in gateways',
     "msgStakeSupplierServices": "supplierServiceConfigs",
     "eventRelayMiningDifficultyUpdateds": "getRelayMiningDifficultyJson (the history); the current value: getServiceSummaryList",
-    "eventApplicationOverserviceds": "getApplicationSpendJson or getOverservicedByAddressesAndTime",
+    "eventApplicationOverserviceds": "getApplicationSpendJson or getOverservicedJson",
     "eventGatewayUnbondingBegins": 'getActorLifecycleJson with kind: "gateway"',
     "eventGatewayUnbondingEnds": 'getActorLifecycleJson with kind: "gateway"',
     "eventSupplierUnbondingBegins": 'getActorLifecycleJson with kind: "supplier"',
@@ -572,6 +581,8 @@ def _page_note(field: FieldNode, key: str, value: Any) -> Optional[str]:
         return None
     if isinstance(value, list):
         limit = min([n for n in (first, row_limit) if n is not None] + [MAX_LIST_ROWS])
+        if name in DEFAULT_ROW_LIMIT_LISTS and row_limit is None:
+            limit = min(limit, DEFAULT_ROW_LIMIT)
         if len(value) >= limit:
             return f"{key} returned {len(value)} rows, the most this call returns: there may be more."
         return None
